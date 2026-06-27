@@ -57,6 +57,7 @@ The first run creates a complete baseline snapshot.
 Example:
 
 Backups/
+
 └── Backup_2026-06-27_10-00-56/
 
 Subsequent Backups
