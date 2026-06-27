@@ -54,6 +54,7 @@ The first run creates a complete baseline snapshot.
 **Example:**
 
 Backups/
+
 └── Backup_2026-06-27_10-00-56/
 
 **Subsequent Backups**
@@ -67,8 +68,11 @@ Later backups use:
 **Result:**
 
 Backups/
+
 ├── Backup_2026-06-27_10-00-56/
+
 ├── Backup_2026-06-28_10-00-22/
+
 └── Backup_2026-06-29_10-00-11/
 
 *Each snapshot appears complete, but unchanged files occupy space only once on disk.*
