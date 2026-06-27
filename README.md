@@ -109,8 +109,8 @@ Snapshot Verification
 
 **To verify a snapshot:**
 
-- cd Backup_<timestamp>
-- sha256sum --check .snapshot_manifest.sha256
+cd Backup_<timestamp>
+sha256sum --check .snapshot_manifest.sha256
 
 A successful verification should report all files as OK and produce no FAILED entries.
 
