@@ -161,11 +161,6 @@ Older snapshots are removed automatically.
 
 Incomplete snapshots created by interrupted runs are cleaned up automatically.
 
-**Design Philosophy**
-
-Simple restore beats clever restore.
-Every snapshot is directly browsable and restorable using standard Linux tools.
-
 ***This project intentionally avoids:***
 
 - Databases
