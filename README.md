@@ -304,6 +304,7 @@ To verify later: cd .../Backup_2026-07-03_09-45-24 && sha256sum --check .snapsho
 ======================================================
 Backup Completed Successfully
 ======================================================
+
 Retention
 Completed snapshots on drive : 14 (keeping last 50)
 Nothing to remove.
