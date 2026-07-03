@@ -267,42 +267,76 @@ Integrity verification is performed using per-snapshot SHA-256 manifests, genera
 ## Example Output
 
 A typical incremental run, showing hard-link verification, deletion tracking, sanity check, and incremental manifest inheritance in action:
+
 ======================================================
 Snapshot Backup (Verified Engine v5)
 Detecting external drives...
 Available drives:
+
 Path  FS Free
+
 [0]  /run/media/user/BackupDrive ext4 822G
+
 Select drive: 0
+
 Repository : /run/media/user/BackupDrive/Backups
+
 Filesystem : ext4
+
 Previous   : Backup_2026-07-02_09-36-03
+
 Mode       : HARD LINK SNAPSHOT (ACTIVE)
+
 Creating Snapshot:
+
 /run/media/user/BackupDrive/Backups/Backup_2026-07-03_09-45-24
+
 Estimating required space (running rsync dry-run, this can take a moment)...
+
 Estimated new data to write : 3 GB
+
 Available space on target   : 822 GB
+
 [RUNNING] Backup in progress...
+
 ======================================================
+
 Snapshot Summary
+
 Base snapshot : Backup_2026-07-02_09-36-03
+
 Snapshot created  : Backup_2026-07-03_09-45-24
+
 Files transferred : 11
+
 New data written  : 2,194,552,464 bytes
+
 rsync duration    : 31 sec
+
 No per-file errors detected.
+
 Verifying hard links against previous snapshot...
+
 Linked specifically to previous snapshot : 36692 / 36704 files
+
 Checking for files removed since previous snapshot...
+
 No files removed since previous snapshot.
+
 Running sanity check (20 random files, not exhaustive)...
+
 Sanity check passed: 20 sampled files match the source.
+
 Building snapshot manifest (incremental)...
+
 Manifest written: 36704 file(s) total (36691 inherited, 13 hashed).
+
 To verify later: cd .../Backup_2026-07-03_09-45-24 && sha256sum --check .snapshot_manifest.sha256
+
 ======================================================
+
 Backup Completed Successfully
+
 ======================================================
 
 Retention
