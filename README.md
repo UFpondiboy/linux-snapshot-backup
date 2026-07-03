@@ -118,6 +118,7 @@ These filesystems do not reliably support hard links. Using one as your backup d
 
 The first run creates a complete baseline snapshot:
 Backups/
+
 └── Backup_2026-06-27_10-00-56/
 
 ### Subsequent Backups
@@ -126,9 +127,13 @@ Later runs use `rsync --link-dest=<previous_snapshot>`:
 
 - Unchanged files are hard-linked to the previous snapshot (zero extra disk space)
 - Changed or new files are copied normally
+
 Backups/
+
 ├── Backup_2026-06-27_10-00-56/
+
 ├── Backup_2026-06-28_10-00-22/
+
 └── Backup_2026-06-29_10-00-11/
 
 Each snapshot looks and browses like a complete, independent backup — but unchanged files physically occupy disk space only once.
@@ -162,7 +167,9 @@ The script will:
 ## Restoring Files
 
 No special restore process exists — that's intentional. Browse to the desired snapshot with any file manager (Dolphin, Nautilus, Thunar) or the command line:
+
 Backups/
+
 └── Backup_2026-06-27_10-00-56/
 
 Copy files back with `cp` or `rsync`:
