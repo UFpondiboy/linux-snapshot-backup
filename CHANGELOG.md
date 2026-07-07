@@ -3,8 +3,10 @@
 All notable changes to this project are documented here.
 
 ## v5 (Verified Engine)
-### Documentation
 
+### Round 7
+
+#### Documentation
 - Clarified in the README that this project creates directory-based snapshots using `rsync` and hard links, not filesystem snapshots (Btrfs, ZFS, LVM, etc.).
 - 
 ### Round 6
