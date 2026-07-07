@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 
 ## v5 (Verified Engine)
 
+### Round 8
+
+- Refactored the script into a `main()` function.
+- Added trap-based cleanup for temporary files created with `mktemp`.
+- Improved interrupt safety (Ctrl+C and abnormal exits no longer leave temporary files behind).
+- Minor ShellCheck-related improvements.
+
 ### Round 7
 
 #### Documentation
