@@ -3,7 +3,7 @@
 # ======================================================
 # Snapshot Backup (Verified Engine v5)
 # ======================================================
-# Patched in v5, round 8 (Reddit feedback):
+# Patched in v5, round 8:
 #   - Added trap-based cleanup for all mktemp temp files. Previously
 #     each temp file was removed with an explicit `rm -f` right after
 #     use, which left a real gap: if the script was interrupted
