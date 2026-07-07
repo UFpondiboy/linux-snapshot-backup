@@ -6,6 +6,16 @@ Each backup appears as a complete, independent copy of your files, while unchang
 
 Built and tested on KDE Plasma / udisks2 automount setups, with fallback support for other Linux desktop environments.
 
+> [!NOTE]
+> **What "snapshot" means in this project**
+>
+> This project creates **directory-based snapshots** using `rsync` and hard links.
+> It does **not** create filesystem snapshots such as **Btrfs**, **ZFS**, or **LVM** snapshots.
+>
+> Every snapshot is an ordinary directory that can be browsed, searched,
+> copied, and restored using standard Linux file tools—no special restore
+> utility, database, or proprietary format is required.
+
 ---
 
 ## Table of Contents
