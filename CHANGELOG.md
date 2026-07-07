@@ -6,15 +6,15 @@ All notable changes to this project are documented here.
 
 ### Round 8
 
-- Refactored the script into a `main()` function.
-- Added trap-based cleanup for temporary files created with `mktemp`.
-- Improved interrupt safety (Ctrl+C and abnormal exits no longer leave temporary files behind).
-- Minor ShellCheck-related improvements.
+- Refactored the script into a main() function.
+- Added trap-based cleanup for temporary files created with mktemp.
+- Improved interrupt safety (Ctrl+C, SIGTERM, and abnormal exits no longer leave temporary files behind).
+- Applied minor ShellCheck-driven code quality improvements.
 
 ### Round 7
 
 - Clarified in the README that this project creates directory-based snapshots using rsync and hard links, not filesystem snapshots (Btrfs, ZFS, LVM, etc.).
-- 
+
 ### Round 6
 
 - Fixed deletion report false positives caused by internal snapshot metadata files.
