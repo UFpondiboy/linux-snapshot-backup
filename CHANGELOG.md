@@ -13,8 +13,7 @@ All notable changes to this project are documented here.
 
 ### Round 7
 
-#### Documentation
-- Clarified in the README that this project creates directory-based snapshots using `rsync` and hard links, not filesystem snapshots (Btrfs, ZFS, LVM, etc.).
+- Clarified in the README that this project creates directory-based snapshots using rsync and hard links, not filesystem snapshots (Btrfs, ZFS, LVM, etc.).
 - 
 ### Round 6
 
