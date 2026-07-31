@@ -1,102 +1,47 @@
 #!/bin/bash
 
 # ======================================================
-# Snapshot Backup (Verified Engine v5)
+# Snapshot Backup (Verified Engine v5.1)
 # ======================================================
-# Patched in v5, round 8:
-#   - Added trap-based cleanup for all mktemp temp files. Previously
-#     each temp file was removed with an explicit `rm -f` right after
-#     use, which left a real gap: if the script was interrupted
-#     (Ctrl+C, crash, shutdown) between creating a temp file and
-#     reaching its cleanup line, that file would be orphaned in /tmp
-#     indefinitely. Now every mktemp result is tracked in a TEMP_FILES
-#     array, and a single `trap cleanup_temp_files EXIT` guarantees
-#     cleanup on any exit path. Verified against three scenarios
-#     (normal exit, `exit 1` error paths, and a simulated SIGTERM
-#     interruption) -- all three correctly triggered cleanup.
+# Changelog (most recent first), 1-2 lines per round:
 #
-# Patched in v5, round 7 (shellcheck feedback):
-#   - Fixed SC2162: all `read -p` prompts changed to `read -rp` so
-#     backslash characters in input are treated literally instead of
-#     being interpreted as escape sequences. Low real-world risk here
-#     (drive number / y-N prompts), but the safer default costs nothing.
-#   - Fixed SC2115: the retention rm -rf now uses "${SNAPSHOT_ROOT:?}"
-#     instead of a bare "$SNAPSHOT_ROOT". If that variable were ever
-#     empty or unset, the old code would silently become `rm -rf "/$old"`
-#     -- a root-relative delete. The :? form makes the script abort
-#     loudly instead of ever risking that, even though other guards
-#     (the SNAPSHOT_NAME_PATTERN regex, SNAPSHOT_ROOT always being set
-#     via mkdir -p earlier) already made this unreachable in practice.
-#   - Wrapped the entire script body in a main() function, per
-#     feedback that a script this size had no functions at all
-#     (aside from notify()). Verified line-for-line against the
-#     unwrapped version -- only indentation and structure changed,
-#     no logic was altered.
+# Round 13: Readability pass (no behavior change): fatal()/warn()/
+#   notify_and_exit() replace 20+ hand-rolled error/warning blocks;
+#   check_dependencies() and detect_drives() pulled out of main(). Also
+#   fixed a real bug this surfaced: `grep -c ... || echo 0` doubled its
+#   output whenever a count was legitimately zero, corrupting manifest
+#   validation on ordinary (non-pathological-filename) runs.
+# Round 12: A file with a backslash/newline in its name no longer forces
+#   a full rehash on EVERY future run -- only that one file is rehashed,
+#   everything else still inherits. Hashing now shows live progress.
+# Round 11: Incomplete snapshots are now quarantined to .incomplete_trash
+#   instead of deleted outright, with their own count-based retention.
+# Round 10: Free-space dry-run exit code is now checked; a failed
+#   preflight aborts instead of silently continuing as "unknown GB".
+# Round 9:  Added an early rsync dependency check so a fresh/minimal
+#   install fails fast instead of deep inside the run.
+# Round 8:  All mktemp temp files are tracked and cleaned up via an EXIT
+#   trap, not just an inline `rm -f` right after use.
+# Round 7:  Shellcheck fixes: `read -rp` everywhere; "${SNAPSHOT_ROOT:?}"
+#   guards retention deletes against an ever-empty/unset variable.
+# Round 6:  Fixed deletion report false-flagging .snapshot_complete;
+#   added total script duration; clearer baseline-manifest messaging.
+# Round 5:  Fixed basename collisions in SOURCE_BASENAME_MAP; removed the
+#   SMART check; added the incremental manifest + integrity guard.
+# Round 4:  Fixed hard-link verification with spaces in filenames;
+#   sources now configurable via sources.conf; added the sanity check.
+# Round 3:  Log lives at $SNAPSHOT/rsync.log; drive table shows free
+#   space and warns at 80% capacity; forces LC_ALL=C for stable parsing.
+# Round 2:  .backupignore via rsync's own filter; hard-link verification
+#   compares against the specific previous snapshot; safer rm -rf guards.
+# Round 1 (v5): Dry-run mode, per-folder .backupignore, rsync -aH,
+#   free-space estimate via dry-run, deleted-files report.
 #
-# Patched in v5, round 6 (reviewer run output):
-#   - Fixed deletion report falsely reporting .snapshot_complete as
-#     deleted: the comparison ran before the completion marker was
-#     written to the new snapshot, so it appeared absent. Internal
-#     metadata files (.snapshot_complete, .snapshot_manifest.sha256,
-#     rsync.log) are now excluded from both sides of the comm
-#     comparison.
-#   - Added SCRIPT_START timer at the top; total script duration
-#     is now printed at the end. Previously the "Duration" line only
-#     covered the rsync transfer itself.
-#   - Improved messaging for manifest baseline run: when no previous
-#     manifest exists, the output now explains why everything is
-#     being hashed and that future runs will be fast.
-#
-# Patched in v5, round 5 (review feedback):
-#   - Fixed the basename collision bug in SOURCE_BASENAME_MAP
-#   - Removed the SMART health check section
-#   - Renamed spot-check to "sanity check" with corrected framing
-#   - Added incremental snapshot manifest with manifest integrity guard
-#   - Documented renamed-file efficiency gap and deleted-file non-issue
-#
-# Patched in v5, round 4 (review feedback):
-#   - Fixed hard-link verification space-in-filename bug
-#   - Fixed dry-run rmdir -> rm -rf
-#   - Deleted-files report uses temp file
-#   - Sources configurable via ~/.config/snapshot-backup/sources.conf
-#   - Drive detection checks /media/$USER and /media as fallbacks
-#   - Added sanity check (20-file random sample vs live source)
-#
-# Patched in v5, round 3 (review feedback):
-#   - Log file lives at $SNAPSHOT/rsync.log
-#   - Drive selection shows table (path, filesystem, free space)
-#   - Free-space check warns at 80% of available space
-#   - Forces LC_ALL=C for consistent rsync --stats output parsing
-#
-# Patched in v5, round 2 (review feedback):
-#   - .backupignore uses rsync's own per-directory merge filter
-#   - Hard-link verification compares inodes against specific prev snapshot
-#   - All rm -rf calls guarded by exact timestamp-format regex
-#   - Hard-link verification uses temp files, not bash variables
-#
-# Patched in v5:
-#   - Dry-run mode (--dry-run flag)
-#   - Per-folder .backupignore excludes
-#   - rsync -aH (preserves hard links within source tree)
-#   - Free-space estimate via rsync --dry-run instead of du
-#   - Fixed 0\n0 bug in per-file error count
-#   - Deleted-files report in summary
-#
-# Carried over from v4:
-#   - Source/target overlap guard
-#   - Lock file (flock) prevents concurrent runs
-#   - rsync per-file error parsing and surfacing
-#   - Desktop notification (notify-send) on success and failure
-#
-# Carried over from v3:
-#   - Array-based --link-dest
-#   - Drive selection input validation
-#   - Available-space check (not just total capacity)
-#   - Filesystem hard-link support check
-#   - Completion marker (.snapshot_complete)
-#   - rsync --stats output capture and parsing
-#   - --no-inc-recursive for smooth progress bar
-#   - Retention: count-based, automatic, with orphan cleanup
+# Carried over from v4: source/target overlap guard, flock lock file,
+#   per-file rsync error surfacing, desktop notifications.
+# Carried over from v3: array-based --link-dest, drive validation,
+#   available-space check, hard-link FS check, completion marker,
+#   count-based retention with orphan cleanup.
 #
 # Restore: intentionally manual. Browse to
 #   <drive>/Backups/Backup_<timestamp>/ and copy files back out.
@@ -104,6 +49,11 @@
 # To verify integrity of any snapshot at any future point:
 #   cd <drive>/Backups/Backup_<timestamp>
 #   sha256sum --check .snapshot_manifest.sha256
+#
+# Incomplete/interrupted runs land in <drive>/Backups/.incomplete_trash/
+# instead of being deleted -- browse there manually if a run was ever
+# interrupted mid-transfer. Only the last TRASH_RETENTION_COUNT of these
+# are kept; older ones are purged automatically on later runs.
 #
 # Known limitations (documented, not bugs):
 #   - Renamed files (same inode, different path) get rehashed rather
@@ -133,11 +83,41 @@ notify() {
     command -v notify-send &>/dev/null && notify-send -u "${3:-normal}" "$1" "$2" || true
 }
 
+warn() {
+    # Standardizes the "yellow, non-fatal" message format used throughout
+    # the script (20+ call sites did this by hand before). Purely a
+    # formatting consolidation -- doesn't change what gets printed.
+    echo -e "${YELLOW}$1${NC}"
+}
+
+notify_and_exit() {
+    # Common tail of every fatal path: notify the desktop, then exit 1.
+    # Kept separate from fatal() below because a few call sites need to
+    # print multi-line/instructional output before exiting, not just a
+    # single red message -- those call this directly instead of fatal().
+    local body="$1"
+    local title="${2:-Backup failed}"
+    notify "$title" "$body" critical
+    exit 1
+}
+
+fatal() {
+    # The common case: one red message, notified to the desktop, exit.
+    # Covers most of this script's error paths in one place instead of
+    # each site hand-rolling the same three lines.
+    local msg="$1"
+    local title="${2:-Backup failed}"
+    echo -e "${RED}${msg}${NC}"
+    notify_and_exit "$msg" "$title"
+}
+
 # Tracks every mktemp file created during the run so they can be cleaned
-# up reliably even if the script is interrupted (Ctrl+C, crash, system
-# shutdown) between creating a temp file and its normal `rm -f`. Without
-# this, an interrupted run could leave orphaned files behind in /tmp
-# indefinitely.
+# up on normal exit and on any catchable termination signal (Ctrl+C /
+# SIGTERM) between creating a temp file and its normal `rm -f`. This is
+# NOT a guarantee against SIGKILL, sudden power loss, or a kernel crash --
+# an EXIT trap cannot run in those cases, so a temp file could still be
+# orphaned in /tmp if the process is killed that hard. It closes the
+# ordinary interruption gap, not every possible one.
 TEMP_FILES=()
 
 cleanup_temp_files() {
@@ -146,24 +126,133 @@ cleanup_temp_files() {
     fi
 }
 
+check_dependencies() {
+    # Round 9/10 only checked for rsync, the dependency most likely to be
+    # missing on a fresh minimal OS install. But the backup engine and the
+    # integrity (manifest/verification) engine also depend unconditionally
+    # on a set of other commands -- sha256sum and xargs in particular are
+    # used by the manifest builder on every run, not just optionally.
+    # Checking only rsync let a missing sha256sum/xargs/etc. slip through
+    # the front door and fail deep inside the manifest stage instead, with
+    # a much less obvious error. This checks everything the script cannot
+    # function without, up front, and fails fast with one clear list.
+    #
+    # Deliberately does NOT attempt to auto-install anything: that would
+    # mean the script escalating privileges (sudo) on its own and
+    # detecting/handling different package managers (apt/pacman/dnf/etc.),
+    # which is a bigger trust and complexity ask than a backup script
+    # should make silently.
+    local required_backup_cmds=(rsync flock realpath df mkdir date basename dirname)
+    local required_integrity_cmds=(find awk grep sed sort comm tee sync du mktemp xargs sha256sum wc tr)
+    # Optional UX-only commands (notify-send, upower, shuf) are probed
+    # individually at their point of use and degrade gracefully -- they
+    # are not part of this hard-fail list.
+    local missing_cmds=()
+    local c
+    for c in "${required_backup_cmds[@]}" "${required_integrity_cmds[@]}"; do
+        command -v "$c" &>/dev/null || missing_cmds+=("$c")
+    done
+
+    if [ ${#missing_cmds[@]} -gt 0 ]; then
+        echo "This script cannot run correctly without them."
+        echo "Install the missing tool(s) with your distro's package manager, e.g.:"
+        echo "  sudo eopkg install rsync                                # Solus"
+        echo "  sudo apt install rsync coreutils util-linux findutils   # Debian/Ubuntu"
+        echo "  sudo pacman -S rsync coreutils util-linux findutils     # Arch/Manjaro"
+        echo "  sudo dnf install rsync coreutils util-linux findutils   # Fedora"
+        echo "coreutils/findutils/util-linux are base-system packages on virtually"
+        echo "every distro (including Solus) and are only ever realistically"
+        echo "missing if rsync itself is -- if something else in the list above is"
+        echo "genuinely missing, search your distro's package index for it by name."
+        fatal "Missing required command(s): ${missing_cmds[*]}"
+    fi
+}
+
+detect_drives() {
+    # Scans candidate mount roots for eligible backup drives, prints the
+    # selection table, and prompts for a choice. Reads BASE_BACKUP,
+    # RUN_USER, and MIN_DRIVE_SIZE_GB (set by main()'s CONFIG section
+    # before this is called) and sets BACKUP_ROOT as its result, the same
+    # way the rest of this script shares state -- through plain globals,
+    # not return values, since that's what actually fits bash rather than
+    # forcing a return-value convention bash doesn't really have.
+    echo ""
+    echo "Detecting external drives..."
+
+    VALID_DRIVES=()
+    VALID_DRIVE_FS=()
+    VALID_DRIVE_AVAIL=()
+
+    local base_candidate d real_d existing already_found size i choice
+
+    for base_candidate in "$BASE_BACKUP" "/media/$RUN_USER" "/media"; do
+        [ -d "$base_candidate" ] || continue
+        for d in "$base_candidate"/*; do
+            [ -d "$d" ] || continue
+
+            real_d=$(realpath "$d" 2>/dev/null)
+            already_found=0
+            for existing in "${VALID_DRIVES[@]}"; do
+                [ "$(realpath "$existing" 2>/dev/null)" = "$real_d" ] && already_found=1 && break
+            done
+            [ "$already_found" -eq 1 ] && continue
+
+            size=$(df -BG "$d" 2>/dev/null | tail -n1 | awk '{print $2}' | tr -d 'G')
+            if [ -n "$size" ] && [ "$size" -ge "$MIN_DRIVE_SIZE_GB" ]; then
+                VALID_DRIVES+=("$d")
+                VALID_DRIVE_FS+=("$(df -T "$d" 2>/dev/null | tail -n1 | awk '{print $2}')")
+                VALID_DRIVE_AVAIL+=("$(df -BG "$d" 2>/dev/null | tail -n1 | awk '{print $4}')")
+            fi
+        done
+    done
+
+    if [ ${#VALID_DRIVES[@]} -eq 0 ]; then
+        fatal "No valid backup drive found"
+    fi
+
+    echo ""
+    echo "Available drives:"
+    printf "%-4s %-45s %-10s %-10s\n" "  #" "Path" "FS" "Free"
+    for i in "${!VALID_DRIVES[@]}"; do
+        printf "[%d]  %-45s %-10s %-10s\n" "$i" "${VALID_DRIVES[$i]}" "${VALID_DRIVE_FS[$i]}" "${VALID_DRIVE_AVAIL[$i]}"
+    done
+
+    read -rp "Select drive: " choice
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -ge "${#VALID_DRIVES[@]}" ]; then
+        echo -e "${RED}Invalid selection${NC}"
+        exit 1
+    fi
+
+    BACKUP_ROOT="${VALID_DRIVES[$choice]}"
+}
+
 main() {
-    # Registered once, fires on ANY exit path (normal completion, `exit 1`
-    # error paths, or an interrupting signal) -- not just the happy path.
+    # Registered once, fires on normal completion, `exit 1` error paths,
+    # and catchable interrupting signals (e.g. Ctrl+C/SIGTERM) -- not just
+    # the happy path. It cannot fire after SIGKILL, a power loss, or a
+    # kernel crash; those are outside what any EXIT trap can guarantee.
     trap cleanup_temp_files EXIT
 
     SCRIPT_START=$SECONDS   # total wall-clock timer for the whole script
 
     clear
     echo "======================================================"
-    echo -e " ${BOLD}Snapshot Backup (Verified Engine v5)${NC}"
+    echo -e " ${BOLD}Snapshot Backup (Verified Engine v5.1)${NC}"
     echo "======================================================"
 
     # -----------------------------
     # CONFIG
     # -----------------------------
-    BASE_BACKUP="/run/media/$USER"
+    # $USER isn't guaranteed to be exported outside an interactive login
+    # shell (cron, systemd units, some desktop launchers leave it unset),
+    # and with `set -u` an unset $USER would crash the script immediately
+    # with "USER: unbound variable" before anything else even ran.
+    RUN_USER="${USER:-$(id -un 2>/dev/null)}"
+    BASE_BACKUP="/run/media/$RUN_USER"
     MIN_DRIVE_SIZE_GB=50          # filters out tiny/non-backup drives (SD cards, boot sticks)
     RETENTION_COUNT=50            # keep this many completed snapshots; older ones are auto-deleted
+    TRASH_RETENTION_COUNT=5        # keep this many quarantined incomplete/interrupted snapshots in .incomplete_trash before they're purged for good
     TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
     COMPLETE_MARKER=".snapshot_complete"
     LOCK_FILE="/tmp/snapshot_backup.lock"
@@ -188,17 +277,20 @@ main() {
     done
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo -e "${YELLOW}DRY RUN MODE — nothing will be written to the drive.${NC}"
+        warn "DRY RUN MODE — nothing will be written to the drive."
     fi
+
+    # -----------------------------
+    # REQUIRED DEPENDENCY CHECK
+    # -----------------------------
+    check_dependencies
 
     # -----------------------------
     # LOCK (prevent concurrent runs)
     # -----------------------------
     exec 9>"$LOCK_FILE"
     if ! flock -n 9; then
-        echo -e "${RED}Another backup run is already in progress (lock: $LOCK_FILE).${NC}"
-        notify "Backup blocked" "Another backup run is already in progress." critical
-        exit 1
+        fatal "Another backup run is already in progress (lock: $LOCK_FILE)." "Backup blocked"
     fi
 
     # -----------------------------
@@ -210,7 +302,7 @@ main() {
             STATE=$(upower -i "$BAT" 2>/dev/null | grep state | awk '{print $2}')
             PERC=$(upower -i "$BAT" 2>/dev/null | grep percentage | awk '{print $2}' | tr -d '%')
             if [ "$STATE" = "discharging" ]; then
-                echo -e "${YELLOW}Warning: Running on battery (${PERC}%)${NC}"
+                warn "Warning: Running on battery (${PERC}%)"
             fi
         fi
     fi
@@ -218,55 +310,7 @@ main() {
     # -----------------------------
     # DRIVE DETECTION
     # -----------------------------
-    echo ""
-    echo "Detecting external drives..."
-
-    VALID_DRIVES=()
-    VALID_DRIVE_FS=()
-    VALID_DRIVE_AVAIL=()
-
-    for BASE_CANDIDATE in "$BASE_BACKUP" "/media/$USER" "/media"; do
-        [ -d "$BASE_CANDIDATE" ] || continue
-        for d in "$BASE_CANDIDATE"/*; do
-            [ -d "$d" ] || continue
-
-            real_d=$(realpath "$d" 2>/dev/null)
-            already_found=0
-            for existing in "${VALID_DRIVES[@]}"; do
-                [ "$(realpath "$existing" 2>/dev/null)" = "$real_d" ] && already_found=1 && break
-            done
-            [ "$already_found" -eq 1 ] && continue
-
-            size=$(df -BG "$d" 2>/dev/null | tail -n1 | awk '{print $2}' | tr -d 'G')
-            if [ -n "$size" ] && [ "$size" -ge "$MIN_DRIVE_SIZE_GB" ]; then
-                VALID_DRIVES+=("$d")
-                VALID_DRIVE_FS+=("$(df -T "$d" 2>/dev/null | tail -n1 | awk '{print $2}')")
-                VALID_DRIVE_AVAIL+=("$(df -BG "$d" 2>/dev/null | tail -n1 | awk '{print $4}')")
-            fi
-        done
-    done
-
-    if [ ${#VALID_DRIVES[@]} -eq 0 ]; then
-        echo -e "${RED}No valid backup drive found${NC}"
-        notify "Backup failed" "No valid backup drive found." critical
-        exit 1
-    fi
-
-    echo ""
-    echo "Available drives:"
-    printf "%-4s %-45s %-10s %-10s\n" "  #" "Path" "FS" "Free"
-    for i in "${!VALID_DRIVES[@]}"; do
-        printf "[%d]  %-45s %-10s %-10s\n" "$i" "${VALID_DRIVES[$i]}" "${VALID_DRIVE_FS[$i]}" "${VALID_DRIVE_AVAIL[$i]}"
-    done
-
-    read -rp "Select drive: " choice
-
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -ge "${#VALID_DRIVES[@]}" ]; then
-        echo -e "${RED}Invalid selection${NC}"
-        exit 1
-    fi
-
-    BACKUP_ROOT="${VALID_DRIVES[$choice]}"
+    detect_drives
 
     # -----------------------------
     # FILESYSTEM CHECK
@@ -276,7 +320,7 @@ main() {
     if [[ " $NO_HARDLINK_FS " == *" $FS_TYPE "* ]]; then
         echo ""
         echo -e "${RED}Warning: '$FS_TYPE' does not reliably support hard links.${NC}"
-        echo -e "${YELLOW}Every snapshot on this drive will silently become a full copy instead of an incremental one.${NC}"
+        warn "Every snapshot on this drive will silently become a full copy instead of an incremental one."
         read -rp "Continue anyway? (y/N): " fs_confirm
         if [[ ! "$fs_confirm" =~ ^[Yy]$ ]]; then
             echo "Aborted."
@@ -285,7 +329,7 @@ main() {
     fi
 
     SNAPSHOT_ROOT="$BACKUP_ROOT/Backups"
-    mkdir -p "$SNAPSHOT_ROOT" || { echo -e "${RED}Could not create $SNAPSHOT_ROOT${NC}"; notify "Backup failed" "Could not create $SNAPSHOT_ROOT" critical; exit 1; }
+    mkdir -p "$SNAPSHOT_ROOT" || fatal "Could not create $SNAPSHOT_ROOT"
 
     # -----------------------------
     # SOURCES
@@ -347,8 +391,7 @@ main() {
             echo -e "${RED}Refusing to run: backup destination overlaps with source '$s'${NC}"
             echo "  Source      : $real_s"
             echo "  Destination : $REAL_SNAPSHOT_ROOT"
-            notify "Backup failed" "Destination overlaps with source: $s" critical
-            exit 1
+            notify_and_exit "Destination overlaps with source: $s"
         fi
     done
 
@@ -412,6 +455,9 @@ main() {
     DRYRUN_LOG=$(mktemp)
     TEMP_FILES+=("$DRYRUN_LOG")
 
+    # Captures stderr into the log too (was previously discarded via
+    # 2>/dev/null), so a real rsync error is visible to the user rather
+    # than silently disappearing.
     rsync -aH \
         --dry-run \
         --stats \
@@ -419,7 +465,23 @@ main() {
         "${EXCLUDES[@]}" \
         "${FILTER_ARGS[@]}" \
         "${SOURCES[@]}" \
-        "$SNAPSHOT/" > "$DRYRUN_LOG" 2>/dev/null
+        "$SNAPSHOT/" > "$DRYRUN_LOG" 2>&1
+    DRYRUN_EXIT=$?
+
+    # This is a preflight check: if the dry-run itself fails (permission
+    # error, vanished source, unwritable/disconnected destination, etc.),
+    # that is a real signal something is wrong BEFORE any data would be
+    # written -- not something to silently paper over as "unknown GB" and
+    # continue into the real backup anyway. Abort here, consistent with
+    # how a failure of the real backup's own rsync call is already
+    # treated further down.
+    if [ "$DRYRUN_EXIT" -ne 0 ]; then
+        echo -e "${RED}Free-space estimation failed (rsync dry-run exit code $DRYRUN_EXIT).${NC}"
+        echo "This is a preflight check -- something is wrong before any data would be written."
+        echo "Dry-run output:"
+        cat "$DRYRUN_LOG"
+        notify_and_exit "Free-space estimation (rsync dry-run) failed with exit code $DRYRUN_EXIT."
+    fi
 
     EST_TRANSFER_BYTES=$(grep "Total transferred file size" "$DRYRUN_LOG" | grep -oE '[0-9,]+' | head -n1 | tr -d ',')
     rm -f "$DRYRUN_LOG"
@@ -434,7 +496,7 @@ main() {
     echo "Available space on target   : ${AVAIL_GB:-unknown} GB"
 
     if [ -n "$EST_TRANSFER_GB" ] && [ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -lt "$EST_TRANSFER_GB" ]; then
-        echo -e "${YELLOW}Warning: available space is less than the estimated new data to write.${NC}"
+        warn "Warning: available space is less than the estimated new data to write."
         read -rp "Continue anyway? (y/N): " space_confirm
         if [[ ! "$space_confirm" =~ ^[Yy]$ ]]; then
             echo "Aborted."
@@ -442,7 +504,7 @@ main() {
         fi
     elif [ -n "$EST_TRANSFER_GB" ] && [ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -gt 0 ] && \
          [ "$((EST_TRANSFER_GB * 100 / AVAIL_GB))" -ge 80 ]; then
-        echo -e "${YELLOW}Note: this run would use ${EST_TRANSFER_GB} GB of the ${AVAIL_GB} GB currently free (80%+). Drive is filling up.${NC}"
+        warn "Note: this run would use ${EST_TRANSFER_GB} GB of the ${AVAIL_GB} GB currently free (80%+). Drive is filling up."
     fi
 
     # -----------------------------
@@ -471,7 +533,22 @@ main() {
         "${SOURCES[@]}" \
         "$SNAPSHOT/" | tee "$LOGFILE"
 
-    RSYNC_EXIT=${PIPESTATUS[0]}
+    RSYNC_TEE_STATUS=("${PIPESTATUS[@]}")
+    RSYNC_EXIT=${RSYNC_TEE_STATUS[0]}
+    TEE_EXIT=${RSYNC_TEE_STATUS[1]}
+
+    # rsync succeeding doesn't mean the log was actually written: if tee
+    # itself failed (e.g. destination went read-only or filled up right
+    # after the transfer), $LOGFILE may be missing or truncated, which
+    # would later make stats/error parsing report "unknown" or miss
+    # per-file errors. Treated as a warning, not fatal, because the
+    # backed-up data itself is governed by RSYNC_EXIT, not by the log.
+    TEE_FAILED=0
+    if [ "$TEE_EXIT" -ne 0 ]; then
+        TEE_FAILED=1
+        warn "Warning: log write via tee failed (exit $TEE_EXIT) -- $LOGFILE may be missing or incomplete."
+        warn "Stats and per-file error parsing below may be unreliable as a result."
+    fi
 
     sync
 
@@ -486,8 +563,7 @@ main() {
     if [ "$RSYNC_EXIT" -ne 0 ]; then
         echo -e "${RED}Backup failed (rsync exit code $RSYNC_EXIT)${NC}"
         echo "Log: $LOGFILE"
-        notify "Backup failed" "rsync exited with code $RSYNC_EXIT. See $LOGFILE" critical
-        exit 1
+        notify_and_exit "rsync exited with code $RSYNC_EXIT. See $LOGFILE"
     fi
 
     if [ -n "$PREV" ]; then
@@ -509,7 +585,7 @@ main() {
         rm -rf "$SNAPSHOT"
         echo ""
         echo "======================================================"
-        echo -e "${YELLOW}Dry run complete — nothing was written. No snapshot, log, or retention changes were made.${NC}"
+        warn "Dry run complete — nothing was written. No snapshot, log, or retention changes were made."
         echo "======================================================"
         exit 0
     fi
@@ -522,7 +598,7 @@ main() {
 
     echo ""
     if [ "$ERROR_LINES" -gt 0 ]; then
-        echo -e "${YELLOW}Per-file warnings/errors detected: $ERROR_LINES${NC}"
+        warn "Per-file warnings/errors detected: $ERROR_LINES"
         echo "First few:"
         grep "^rsync: " "$LOGFILE" | head -n 5
         echo "Full details in: $LOGFILE"
@@ -530,6 +606,10 @@ main() {
     else
         echo -e "${GREEN}No per-file errors detected.${NC}"
         SUMMARY_HAD_WARNINGS=0
+    fi
+
+    if [ "$TEE_FAILED" -eq 1 ]; then
+        SUMMARY_HAD_WARNINGS=1
     fi
 
     # -----------------------------
@@ -570,8 +650,8 @@ main() {
         echo "Linked specifically to previous snapshot : $LINKED_FILES / $TOTAL_FILES files"
 
         if [ "$TOTAL_FILES" -gt 0 ] && [ "$LINKED_FILES" -eq 0 ]; then
-            echo -e "${YELLOW}Warning: no files were hard-linked. This snapshot may be a full, non-deduplicated copy.${NC}"
-            echo -e "${YELLOW}Check that the target filesystem actually supports hard links.${NC}"
+            warn "Warning: no files were hard-linked. This snapshot may be a full, non-deduplicated copy."
+            warn "Check that the target filesystem actually supports hard links."
         fi
 
         # -----------------------------
@@ -593,7 +673,7 @@ main() {
         DELETED_COUNT=$(wc -l < "$DELETED_FILE")
 
         if [ "$DELETED_COUNT" -gt 0 ]; then
-            echo -e "${YELLOW}Removed since last snapshot: $DELETED_COUNT file(s)${NC}"
+            warn "Removed since last snapshot: $DELETED_COUNT file(s)"
             echo "(still safely present in $PREV — nothing is lost)"
             echo "First few:"
             head -n 5 "$DELETED_FILE" | sed 's|^\./|  - |'
@@ -636,7 +716,7 @@ main() {
 
             if [ -n "$snap_sum" ] && [ -n "$src_sum" ] && [ "$snap_sum" != "$src_sum" ]; then
                 MISMATCHES=$((MISMATCHES + 1))
-                echo -e "${YELLOW}  Mismatch: $relpath_clean${NC}"
+                warn "  Mismatch: $relpath_clean"
             fi
         done
 
@@ -646,7 +726,7 @@ main() {
             echo -e "${GREEN}Sanity check passed: $CHECKED sampled files match the source.${NC}"
         else
             echo -e "${RED}Sanity check found $MISMATCHES/$CHECKED mismatched file(s) -- see above.${NC}"
-            echo -e "${YELLOW}Could be a false alarm if those files changed after the backup ran.${NC}"
+            warn "Could be a false alarm if those files changed after the backup ran."
         fi
     else
         echo ""
@@ -656,6 +736,16 @@ main() {
     # -----------------------------
     # SNAPSHOT MANIFEST (incremental)
     # -----------------------------
+    # The completion marker is the trust boundary of this whole design: a
+    # marked snapshot is treated as a valid --link-dest base, counted as
+    # completed, and kept by retention. Because the script runs under
+    # `set -uo pipefail` rather than `set -e`, every command in this stage
+    # that could fail (find/awk/tr/xargs/sha256sum/sort) is checked
+    # explicitly below, and MANIFEST_OK is the single gate that decides
+    # whether the completion marker gets written at all. If anything in
+    # here fails, the run stops WITHOUT writing the marker -- the snapshot
+    # is left on disk as an incomplete leftover, which the existing
+    # retention logic already knows how to clean up on the next run.
     echo ""
     echo "Building snapshot manifest (incremental)..."
     MANIFEST="$SNAPSHOT/.snapshot_manifest.sha256"
@@ -667,35 +757,111 @@ main() {
     TEMP_FILES+=("$MANIFEST_REUSE_FILE" "$MANIFEST_COMPUTE_FILE" \
         "$MANIFEST_PREV_INODE_FILE" "$MANIFEST_SNAP_INODE_FILE" "$MANIFEST_CK_FILE")
 
+    MANIFEST_OK=1
+    manifest_fail() {
+        # Centralizes "something in the manifest stage broke" handling so
+        # every check point below fails the same way instead of some
+        # paths silently falling through to a marker write.
+        MANIFEST_OK=0
+        echo -e "${RED}Manifest stage failed: $1${NC}"
+    }
+
+    manifest_hash_with_progress() {
+        # sha256sum over tens of thousands of files (a full baseline
+        # rehash, or just a large batch of new/changed files) can take
+        # minutes with zero output otherwise -- indistinguishable from a
+        # hang. This sits between sha256sum and the manifest file: every
+        # line is passed through unchanged (so the manifest content isn't
+        # affected at all), while a periodic "Hashed X/Y files" line goes
+        # to the terminal (stderr, so it doesn't end up IN the manifest).
+        local total="$1"
+        awk -v total="$total" '
+            {
+                print
+                c++
+                step = (total > 20) ? int(total / 20) : 1
+                if (step < 1) step = 1
+                if (c % step == 0 || c == total) {
+                    printf "\r  Hashed %d/%d files...", c, total > "/dev/stderr"
+                    fflush("/dev/stderr")
+                }
+            }
+            END { if (total > 0) printf "\r%*s\r", 60, "" > "/dev/stderr" }
+        '
+    }
+
+    : > "$MANIFEST" || manifest_fail "could not create manifest file"
+
     (cd "$SNAPSHOT" && find . -type f \
         ! -name ".snapshot_manifest.sha256" ! -name "$COMPLETE_MARKER" \
         -printf "%i %s %Ts %P\0") > "$MANIFEST_SNAP_INODE_FILE"
+    RC=$?
+    [ "$RC" -eq 0 ] || manifest_fail "could not list snapshot files"
+    SNAP_FILE_COUNT=$(tr -cd '\0' < "$MANIFEST_SNAP_INODE_FILE" | wc -c)
 
     MANIFEST_REUSED=0
     MANIFEST_COMPUTED=0
 
+    # -----------------------------
+    # PREVIOUS MANIFEST VALIDATION
+    # -----------------------------
+    # The old guard only proved that ONE line in the previous manifest
+    # looked like a valid sha256sum record -- a heavily truncated or
+    # corrupted manifest with a single intact line could pass. This now
+    # requires EVERY non-empty line to match either the plain format or
+    # GNU sha256sum's "escaped" format (a leading backslash, used when a
+    # filename contains a literal backslash or newline -- see the ck-table
+    # build below for why escaped lines are safe to skip rather than
+    # needing to invalidate everything), AND the line count to match the
+    # previous snapshot's actual file count. Anything else is treated as
+    # corruption and falls back to a full rehash.
     PREV_MANIFEST_PATH="$SNAPSHOT_ROOT/$PREV/.snapshot_manifest.sha256"
     PREV_MANIFEST_OK=0
     if [ -n "$PREV" ] && [ -f "$PREV_MANIFEST_PATH" ]; then
-        if grep -qE '^[0-9a-f]{64}  .+$' "$PREV_MANIFEST_PATH" 2>/dev/null; then
-            PREV_MANIFEST_OK=1
-        else
-            echo -e "${YELLOW}Warning: previous manifest appears empty or malformed -- falling back to full baseline hash.${NC}"
-        fi
-    fi
-
-    if [ "$PREV_MANIFEST_OK" -eq 1 ]; then
         (cd "$SNAPSHOT_ROOT/$PREV" && find . -type f \
             ! -name ".snapshot_manifest.sha256" ! -name "$COMPLETE_MARKER" \
             -printf "%i %s %Ts %P\0") > "$MANIFEST_PREV_INODE_FILE"
+        RC=$?
+        [ "$RC" -eq 0 ] || manifest_fail "could not list previous snapshot files"
+        PREV_FILE_COUNT=$(tr -cd '\0' < "$MANIFEST_PREV_INODE_FILE" | wc -c)
 
+        # NOTE: `grep -c` exits with status 1 whenever it finds zero
+        # matches -- that's normal, successful behavior for grep, not an
+        # error, but it still trips a naive `|| echo 0` fallback and
+        # doubles the output to "0\n0", corrupting the arithmetic below.
+        # Capturing the count regardless of exit status and only
+        # defaulting on a truly empty result (e.g. an unreadable file)
+        # avoids that.
+        PREV_TOTAL_LINES=$(grep -c '.' "$PREV_MANIFEST_PATH" 2>/dev/null); PREV_TOTAL_LINES=${PREV_TOTAL_LINES:-0}
+        PREV_PLAIN_LINES=$(grep -cE '^[0-9a-f]{64}  .+$' "$PREV_MANIFEST_PATH" 2>/dev/null); PREV_PLAIN_LINES=${PREV_PLAIN_LINES:-0}
+        PREV_ESCAPED_LINES=$(grep -cE '^\\[0-9a-f]{64}  .+$' "$PREV_MANIFEST_PATH" 2>/dev/null); PREV_ESCAPED_LINES=${PREV_ESCAPED_LINES:-0}
+        PREV_VALID_LINES=$((PREV_PLAIN_LINES + PREV_ESCAPED_LINES))
+
+        if [ "$PREV_TOTAL_LINES" -eq 0 ]; then
+            warn "Warning: previous manifest is empty -- falling back to full baseline hash."
+        elif [ "$PREV_TOTAL_LINES" -ne "$PREV_VALID_LINES" ]; then
+            warn "Warning: previous manifest has $((PREV_TOTAL_LINES - PREV_VALID_LINES)) malformed line(s) -- falling back to full baseline hash."
+        elif [ "$PREV_TOTAL_LINES" -ne "$PREV_FILE_COUNT" ]; then
+            warn "Warning: previous manifest has $PREV_TOTAL_LINES entries but $PREV_FILE_COUNT files exist in $PREV -- treating as untrustworthy, falling back to full baseline hash."
+        else
+            PREV_MANIFEST_OK=1
+            if [ "$PREV_ESCAPED_LINES" -gt 0 ]; then
+                echo "(Previous manifest has $PREV_ESCAPED_LINES escaped filename record(s) -- those specific file(s) will be rehashed, everything else is inherited normally)"
+            fi
+        fi
+    fi
+
+    if [ "$MANIFEST_OK" -eq 1 ] && [ "$PREV_MANIFEST_OK" -eq 1 ]; then
         awk '{
+            if ($0 ~ /^\\/) next   # escaped record (backslash/newline in filename) -- fixed-offset parsing below does not apply to these; skipping means that one path has no cached checksum and simply gets rehashed by the correlation step, without affecting any other file
             ck   = substr($0, 1, 64)
             path = substr($0, 67)
             sub(/^\.\//, "", path)
             print ck " " path
         }' "$PREV_MANIFEST_PATH" \
             | tr '\n' '\0' > "$MANIFEST_CK_FILE"
+        RC=("${PIPESTATUS[@]}")
+        [ "${RC[0]}" -eq 0 ] && [ "${RC[1]}" -eq 0 ] || manifest_fail "could not build checksum lookup table"
 
         awk -v RS='\0' \
             -v ck_file="$MANIFEST_CK_FILE" \
@@ -731,32 +897,64 @@ main() {
             }
         }
         ' "$MANIFEST_PREV_INODE_FILE" "$MANIFEST_SNAP_INODE_FILE"
+        [ $? -eq 0 ] || manifest_fail "could not correlate previous/current file attributes"
 
-        [ -s "$MANIFEST_REUSE_FILE" ] && {
+        if [ -s "$MANIFEST_REUSE_FILE" ]; then
             cat "$MANIFEST_REUSE_FILE" >> "$MANIFEST"
             MANIFEST_REUSED=$(wc -l < "$MANIFEST_REUSE_FILE")
-        }
-        [ -s "$MANIFEST_COMPUTE_FILE" ] && {
-            (cd "$SNAPSHOT" && tr '\036' '\0' < "$MANIFEST_COMPUTE_FILE" \
-                | xargs -0 sha256sum) >> "$MANIFEST"
-            MANIFEST_COMPUTED=$(tr -cd '\036' < "$MANIFEST_COMPUTE_FILE" | wc -c)
-        }
-    else
-        if [ -n "$PREV" ]; then
-            echo "(No previous manifest found in $PREV -- generating baseline, future runs will be fast)"
         fi
+        if [ -s "$MANIFEST_COMPUTE_FILE" ]; then
+            COMPUTE_TOTAL=$(tr -cd '\036' < "$MANIFEST_COMPUTE_FILE" | wc -c)
+            echo "Hashing $COMPUTE_TOTAL new/changed file(s)..."
+            (cd "$SNAPSHOT" && tr '\036' '\0' < "$MANIFEST_COMPUTE_FILE" \
+                | xargs -0 sha256sum) \
+                | manifest_hash_with_progress "$COMPUTE_TOTAL" >> "$MANIFEST"
+            RC=("${PIPESTATUS[@]}")
+            [ "${RC[0]}" -eq 0 ] && [ "${RC[1]}" -eq 0 ] || manifest_fail "hashing new/changed files failed (sha256sum/xargs)"
+            MANIFEST_COMPUTED=$COMPUTE_TOTAL
+        fi
+    elif [ "$MANIFEST_OK" -eq 1 ]; then
+        if [ -n "$PREV" ]; then
+            echo "(No usable previous manifest in $PREV -- generating baseline, future runs will be fast)"
+        fi
+        echo "Hashing $SNAP_FILE_COUNT file(s) (full baseline -- this can take a while on a large dataset)..."
         (cd "$SNAPSHOT" && find . -type f \
             ! -name ".snapshot_manifest.sha256" ! -name "$COMPLETE_MARKER" \
-            -print0 | sort -z | xargs -0 sha256sum) >> "$MANIFEST"
+            -print0 | sort -z | xargs -0 sha256sum) \
+            | manifest_hash_with_progress "$SNAP_FILE_COUNT" >> "$MANIFEST"
+        RC=("${PIPESTATUS[@]}")
+        [ "${RC[0]}" -eq 0 ] && [ "${RC[1]}" -eq 0 ] || manifest_fail "baseline hashing failed (find/sort/xargs/sha256sum)"
         MANIFEST_COMPUTED=$(wc -l < "$MANIFEST")
     fi
 
-    sort -k2 "$MANIFEST" -o "$MANIFEST"
+    if [ "$MANIFEST_OK" -eq 1 ]; then
+        sort -k2 "$MANIFEST" -o "$MANIFEST" || manifest_fail "final manifest sort failed"
+    fi
+
     rm -f "$MANIFEST_REUSE_FILE" "$MANIFEST_COMPUTE_FILE" \
           "$MANIFEST_PREV_INODE_FILE" "$MANIFEST_SNAP_INODE_FILE" \
           "$MANIFEST_CK_FILE"
 
-    MANIFEST_TOTAL=$(wc -l < "$MANIFEST")
+    if [ "$MANIFEST_OK" -eq 1 ]; then
+        MANIFEST_TOTAL=$(wc -l < "$MANIFEST")
+        # Final self-check: the manifest must describe exactly as many
+        # files as actually exist in the snapshot. This is the same
+        # count-matching principle applied to the manifest we just wrote,
+        # not just the inherited one -- it catches a partial write that
+        # every individual step above still reported success for.
+        if [ "$MANIFEST_TOTAL" -ne "$SNAP_FILE_COUNT" ]; then
+            manifest_fail "manifest has $MANIFEST_TOTAL entries but $SNAP_FILE_COUNT files exist in the snapshot"
+        fi
+    fi
+
+    if [ "$MANIFEST_OK" -ne 1 ]; then
+        echo -e "${RED}Refusing to mark this snapshot complete: manifest generation did not finish cleanly.${NC}"
+        echo -e "${RED}The transferred files in $SNAPSHOT are intact, but no completion marker will be written,${NC}"
+        echo -e "${RED}so this snapshot will NOT be used as a future --link-dest base and will be cleaned up${NC}"
+        echo -e "${RED}as an incomplete leftover on the next run.${NC}"
+        notify_and_exit "Manifest generation failed for $(basename "$SNAPSHOT") -- snapshot not marked complete."
+    fi
+
     echo -e "${GREEN}Manifest written: $MANIFEST_TOTAL file(s) total" \
         "(${MANIFEST_REUSED} inherited, ${MANIFEST_COMPUTED} hashed).${NC}"
     echo "To verify later: cd $SNAPSHOT && sha256sum --check .snapshot_manifest.sha256"
@@ -764,6 +962,8 @@ main() {
     # -----------------------------
     # COMPLETION MARKER
     # -----------------------------
+    # Only reached if MANIFEST_OK held all the way through -- see the
+    # gate immediately above.
     touch "$SNAPSHOT/$COMPLETE_MARKER"
 
     echo ""
@@ -781,17 +981,61 @@ main() {
 
     SNAPSHOT_NAME_PATTERN='^Backup_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}$'
 
+    # An interrupted run (power loss, unplugged drive, Ctrl+C mid-transfer)
+    # leaves a Backup_* directory with no completion marker. Previously
+    # this was rm -rf'd immediately on the next launch with no way to
+    # look at it first -- if that interruption happened at 99% of a large
+    # transfer, whatever partial data existed was gone before anyone
+    # could inspect or recover it. It's now quarantined into
+    # .incomplete_trash instead of deleted outright. This is cheap: mv
+    # within the same filesystem is a rename, not a copy, so it doesn't
+    # duplicate any data -- hard links to the previous snapshot (for
+    # files that didn't change) stay intact and cost nothing extra; only
+    # the newly-transferred/changed data from that one failed run is
+    # what's actually being kept around. .incomplete_trash itself has its
+    # own count-based retention below so it can't grow forever.
+    TRASH_DIR="$SNAPSHOT_ROOT/.incomplete_trash"
+
     for d in "$SNAPSHOT_ROOT"/Backup_*; do
         [ -d "$d" ] || continue
         [ -f "$d/$COMPLETE_MARKER" ] && continue
         name=$(basename "$d")
         if [[ ! "$name" =~ $SNAPSHOT_NAME_PATTERN ]]; then
-            echo -e "${YELLOW}Skipping unexpected directory name (not deleting): $name${NC}"
+            warn "Skipping unexpected directory name (not touching): $name"
             continue
         fi
-        echo "Removing incomplete leftover snapshot: $name"
-        rm -rf "${SNAPSHOT_ROOT:?}/$name"
+        mkdir -p "$TRASH_DIR" || { echo -e "${RED}Could not create $TRASH_DIR -- leaving $name in place.${NC}"; continue; }
+        if [ -e "$TRASH_DIR/$name" ]; then
+            warn "$TRASH_DIR/$name already exists -- leaving $name in place rather than overwriting."
+            continue
+        fi
+        echo "Quarantining incomplete leftover snapshot: $name -> .incomplete_trash/ (not deleted)"
+        mv "${SNAPSHOT_ROOT:?}/$name" "$TRASH_DIR/$name" \
+            || warn "Could not move $name into quarantine -- leaving it in place."
     done
+
+    # -----------------------------
+    # QUARANTINE RETENTION (.incomplete_trash)
+    # -----------------------------
+    if [ -d "$TRASH_DIR" ]; then
+        mapfile -t TRASHED < <(find "$TRASH_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
+        TRASH_TOTAL=${#TRASHED[@]}
+        if [ "$TRASH_TOTAL" -gt "$TRASH_RETENTION_COUNT" ]; then
+            TRASH_TO_REMOVE=$((TRASH_TOTAL - TRASH_RETENTION_COUNT))
+            echo "Purging $TRASH_TO_REMOVE oldest quarantined snapshot(s) beyond .incomplete_trash retention (keeping last $TRASH_RETENTION_COUNT):"
+            for ((i = 0; i < TRASH_TO_REMOVE; i++)); do
+                old_trash="${TRASHED[$i]}"
+                if [[ ! "$old_trash" =~ $SNAPSHOT_NAME_PATTERN ]]; then
+                    warn "Skipping unexpected directory name in trash (not deleting): $old_trash"
+                    continue
+                fi
+                echo "  - $old_trash"
+                rm -rf "${TRASH_DIR:?}/$old_trash"
+            done
+        elif [ "$TRASH_TOTAL" -gt 0 ]; then
+            echo "Quarantined incomplete snapshots on drive : $TRASH_TOTAL (keeping last $TRASH_RETENTION_COUNT, in .incomplete_trash)"
+        fi
+    fi
 
     COMPLETED_SNAPSHOTS=()
     for d in "$SNAPSHOT_ROOT"/Backup_*; do
@@ -810,7 +1054,7 @@ main() {
         for ((i = 0; i < TO_REMOVE; i++)); do
             old="${COMPLETED_SNAPSHOTS[$i]}"
             if [[ ! "$old" =~ $SNAPSHOT_NAME_PATTERN ]]; then
-                echo -e "${YELLOW}Skipping unexpected directory name (not deleting): $old${NC}"
+                warn "Skipping unexpected directory name (not deleting): $old"
                 continue
             fi
             echo "  - $old"
