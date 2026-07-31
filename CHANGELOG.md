@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## v5 (Verified Engine)
 
+### Round 9
+
+- Refined temporary file lifecycle management and documentation.
+- Improved inline documentation throughout the script for maintainability.
+- Added automatic execution guard (`main "$@"`) allowing the script to be safely sourced without immediately starting a backup.
+- Improved retention safety comments and internal code documentation.
+- Minor code cleanup and consistency improvements.
+
 ### Round 8
 
 - Refactored the script into a main() function.
