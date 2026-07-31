@@ -82,6 +82,7 @@ snapshot-backup.sh --dry-run
 - External drive auto-detection (`/run/media/$USER`, `/media/$USER`, `/media`)
 - Source/destination overlap protection
 - Concurrent-run protection via file locking
+- Safe interrupt cleanup for all temporary files (Ctrl+C, SIGTERM, crashes)
 - Optional per-folder `.backupignore`
 - Post-backup sanity check (random sample vs. live source)
 - Dry-run mode
