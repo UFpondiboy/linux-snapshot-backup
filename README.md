@@ -18,6 +18,27 @@ Built and tested on KDE Plasma / udisks2 automount setups, with fallback support
 
 ---
 
+## Design Goals
+
+This project intentionally prioritizes **reliability, simplicity, and long-term recoverability** over feature count.
+
+The guiding principles are:
+
+- **Single self-contained Bash script** — no helper scripts, libraries, or installation process.
+- **Human-readable backups** — every snapshot is a normal directory that can be browsed with any file manager.
+- **Simple restores** — recover files using standard Linux tools such as `cp`, `rsync`, or your preferred file manager.
+- **No proprietary formats** — backups remain usable even if this project is no longer available.
+- **Fail safely** — if the script cannot verify that a snapshot completed correctly, it refuses to mark it as complete.
+- **Integrity first** — completed snapshots include SHA-256 manifests and multiple verification stages to help detect corruption.
+- **Portable by design** — depends only on standard Linux utilities available on virtually every distribution.
+- **No cloud services, databases, daemons, or background processes** — the script performs its work and exits.
+
+The philosophy is simple:
+
+> **If this script disappeared tomorrow, every backup it created should still be completely usable with standard Linux filesystem tools.**
+
+---
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
