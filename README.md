@@ -372,6 +372,9 @@ Incremental backup:
 ## Design Philosophy
 
 **Simple restore beats clever restore.**
+**One script beats many scripts.**
+
+This project intentionally ships as a single self-contained Bash script. There are no helper scripts, libraries, or runtime dependencies beyond standard Linux utilities. Copy one file to another machine and it is immediately usable without worrying about missing components or keeping multiple files synchronized.
 
 Every snapshot is an ordinary directory of ordinary files — directly browsable and restorable with any file manager or `cp`. This project intentionally avoids:
 
