@@ -1,10 +1,14 @@
 #!/bin/bash
 
 # ======================================================
-# Snapshot Backup (Verified Engine v5.1)
+# Snapshot Backup (Engine v5.1)
 # ======================================================
 # Changelog (most recent first), 1-2 lines per round:
 #
+# Round 14: More readability consolidation: confirm_or_abort() replaces
+#   two identical y/N prompts; section()/section_open()/section_close()
+#   replace 6 hand-rolled banner blocks; true constants marked readonly.
+#   Renamed to Engine v5.1, dropped "Verified" from the title.
 # Round 13: Readability pass (no behavior change): fatal()/warn()/
 #   notify_and_exit() replace 20+ hand-rolled error/warning blocks;
 #   check_dependencies() and detect_drives() pulled out of main(). Also
@@ -109,6 +113,43 @@ fatal() {
     local title="${2:-Backup failed}"
     echo -e "${RED}${msg}${NC}"
     notify_and_exit "$msg" "$title"
+}
+
+confirm_or_abort() {
+    # Standardizes the "y/N, abort if not confirmed" prompt used at both
+    # the filesystem-compatibility warning and the low-space warning --
+    # those two were byte-for-byte identical except the variable name.
+    local reply
+    read -rp "Continue anyway? (y/N): " reply
+    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+}
+
+section() {
+    # Standardizes the repeated blank-line + rule + title + rule banner
+    # used for short, self-contained announcements throughout the
+    # script's output. Uses `echo -e` so already-colored text (success
+    # in green, a warning in yellow) works the same as plain text.
+    echo ""
+    echo "======================================================"
+    echo -e "$1"
+    echo "======================================================"
+}
+
+section_open() {
+    # Same banner, but for sections with a variable-length body between
+    # the header and a separate closing rule printed later via
+    # section_close (e.g. Retention, which lists removed snapshots
+    # in between).
+    echo ""
+    echo "======================================================"
+    echo -e "$1"
+}
+
+section_close() {
+    echo "======================================================"
 }
 
 # Tracks every mktemp file created during the run so they can be cleaned
@@ -238,7 +279,7 @@ main() {
 
     clear
     echo "======================================================"
-    echo -e " ${BOLD}Snapshot Backup (Verified Engine v5.1)${NC}"
+    echo -e " ${BOLD}Snapshot Backup (Engine v5.1)${NC}"
     echo "======================================================"
 
     # -----------------------------
@@ -250,14 +291,14 @@ main() {
     # with "USER: unbound variable" before anything else even ran.
     RUN_USER="${USER:-$(id -un 2>/dev/null)}"
     BASE_BACKUP="/run/media/$RUN_USER"
-    MIN_DRIVE_SIZE_GB=50          # filters out tiny/non-backup drives (SD cards, boot sticks)
-    RETENTION_COUNT=50            # keep this many completed snapshots; older ones are auto-deleted
-    TRASH_RETENTION_COUNT=5        # keep this many quarantined incomplete/interrupted snapshots in .incomplete_trash before they're purged for good
+    readonly MIN_DRIVE_SIZE_GB=50          # filters out tiny/non-backup drives (SD cards, boot sticks)
+    readonly RETENTION_COUNT=50            # keep this many completed snapshots; older ones are auto-deleted
+    readonly TRASH_RETENTION_COUNT=5       # keep this many quarantined incomplete/interrupted snapshots in .incomplete_trash before they're purged for good
     TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-    COMPLETE_MARKER=".snapshot_complete"
-    LOCK_FILE="/tmp/snapshot_backup.lock"
+    readonly COMPLETE_MARKER=".snapshot_complete"
+    readonly LOCK_FILE="/tmp/snapshot_backup.lock"
 
-    NO_HARDLINK_FS="vfat exfat msdos ntfs fuseblk"
+    readonly NO_HARDLINK_FS="vfat exfat msdos ntfs fuseblk"
 
     # -----------------------------
     # ARGUMENT PARSING
@@ -321,11 +362,7 @@ main() {
         echo ""
         echo -e "${RED}Warning: '$FS_TYPE' does not reliably support hard links.${NC}"
         warn "Every snapshot on this drive will silently become a full copy instead of an incremental one."
-        read -rp "Continue anyway? (y/N): " fs_confirm
-        if [[ ! "$fs_confirm" =~ ^[Yy]$ ]]; then
-            echo "Aborted."
-            exit 1
-        fi
+        confirm_or_abort
     fi
 
     SNAPSHOT_ROOT="$BACKUP_ROOT/Backups"
@@ -497,11 +534,7 @@ main() {
 
     if [ -n "$EST_TRANSFER_GB" ] && [ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -lt "$EST_TRANSFER_GB" ]; then
         warn "Warning: available space is less than the estimated new data to write."
-        read -rp "Continue anyway? (y/N): " space_confirm
-        if [[ ! "$space_confirm" =~ ^[Yy]$ ]]; then
-            echo "Aborted."
-            exit 1
-        fi
+        confirm_or_abort
     elif [ -n "$EST_TRANSFER_GB" ] && [ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -gt 0 ] && \
          [ "$((EST_TRANSFER_GB * 100 / AVAIL_GB))" -ge 80 ]; then
         warn "Note: this run would use ${EST_TRANSFER_GB} GB of the ${AVAIL_GB} GB currently free (80%+). Drive is filling up."
@@ -555,10 +588,7 @@ main() {
     # -----------------------------
     # SUMMARY
     # -----------------------------
-    echo ""
-    echo "======================================================"
-    echo "Snapshot Summary"
-    echo "======================================================"
+    section "Snapshot Summary"
 
     if [ "$RSYNC_EXIT" -ne 0 ]; then
         echo -e "${RED}Backup failed (rsync exit code $RSYNC_EXIT)${NC}"
@@ -583,10 +613,7 @@ main() {
 
     if [ "$DRY_RUN" -eq 1 ]; then
         rm -rf "$SNAPSHOT"
-        echo ""
-        echo "======================================================"
-        warn "Dry run complete — nothing was written. No snapshot, log, or retention changes were made."
-        echo "======================================================"
+        section "${YELLOW}Dry run complete — nothing was written. No snapshot, log, or retention changes were made.${NC}"
         exit 0
     fi
 
@@ -647,7 +674,12 @@ main() {
 
         rm -f "$PREV_INODE_FILE" "$SNAP_INODE_FILE"
 
-        echo "Linked specifically to previous snapshot : $LINKED_FILES / $TOTAL_FILES files"
+        if [ "$TOTAL_FILES" -gt 0 ]; then
+            LINK_PCT=$(awk -v l="$LINKED_FILES" -v t="$TOTAL_FILES" 'BEGIN{printf "%.2f", (l*100)/t}')
+            echo "Hard-linked to previous snapshot : $LINKED_FILES / $TOTAL_FILES files (${LINK_PCT}%)"
+        else
+            echo "Hard-linked to previous snapshot : $LINKED_FILES / $TOTAL_FILES files"
+        fi
 
         if [ "$TOTAL_FILES" -gt 0 ] && [ "$LINKED_FILES" -eq 0 ]; then
             warn "Warning: no files were hard-linked. This snapshot may be a full, non-deduplicated copy."
@@ -905,7 +937,7 @@ main() {
         fi
         if [ -s "$MANIFEST_COMPUTE_FILE" ]; then
             COMPUTE_TOTAL=$(tr -cd '\036' < "$MANIFEST_COMPUTE_FILE" | wc -c)
-            echo "Hashing $COMPUTE_TOTAL new/changed file(s)..."
+            echo "Hashing $COMPUTE_TOTAL new/changed/uninheritable file(s)..."
             (cd "$SNAPSHOT" && tr '\036' '\0' < "$MANIFEST_COMPUTE_FILE" \
                 | xargs -0 sha256sum) \
                 | manifest_hash_with_progress "$COMPUTE_TOTAL" >> "$MANIFEST"
@@ -955,8 +987,14 @@ main() {
         notify_and_exit "Manifest generation failed for $(basename "$SNAPSHOT") -- snapshot not marked complete."
     fi
 
-    echo -e "${GREEN}Manifest written: $MANIFEST_TOTAL file(s) total" \
-        "(${MANIFEST_REUSED} inherited, ${MANIFEST_COMPUTED} hashed).${NC}"
+    if [ "$MANIFEST_TOTAL" -gt 0 ]; then
+        MANIFEST_REUSE_PCT=$(awk -v r="$MANIFEST_REUSED" -v t="$MANIFEST_TOTAL" 'BEGIN{printf "%.2f", (r*100)/t}')
+        echo -e "${GREEN}Manifest written: $MANIFEST_TOTAL file(s) total" \
+            "(${MANIFEST_REUSED} inherited [${MANIFEST_REUSE_PCT}%], ${MANIFEST_COMPUTED} hashed).${NC}"
+    else
+        echo -e "${GREEN}Manifest written: $MANIFEST_TOTAL file(s) total" \
+            "(${MANIFEST_REUSED} inherited, ${MANIFEST_COMPUTED} hashed).${NC}"
+    fi
     echo "To verify later: cd $SNAPSHOT && sha256sum --check .snapshot_manifest.sha256"
 
     # -----------------------------
@@ -966,18 +1004,12 @@ main() {
     # gate immediately above.
     touch "$SNAPSHOT/$COMPLETE_MARKER"
 
-    echo ""
-    echo "======================================================"
-    echo -e "${GREEN}Backup Completed Successfully${NC}"
-    echo "======================================================"
+    section "${GREEN}Backup Completed Successfully${NC}"
 
     # -----------------------------
     # RETENTION (keep last RETENTION_COUNT completed snapshots)
     # -----------------------------
-    echo ""
-    echo "======================================================"
-    echo "Retention"
-    echo "======================================================"
+    section_open "Retention"
 
     SNAPSHOT_NAME_PATTERN='^Backup_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}$'
 
@@ -1068,7 +1100,7 @@ main() {
     else
         echo "Nothing to remove."
     fi
-    echo "======================================================"
+    section_close
 
     FINAL_SIZE=$(du -sh "$SNAPSHOT" | awk '{print $1}')
     echo ""
