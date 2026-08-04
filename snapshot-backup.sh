@@ -5,6 +5,10 @@
 # ======================================================
 # Changelog (most recent first), 1-2 lines per round:
 #
+# Round 15: Retention switched from count-based (RETENTION_COUNT=50) to
+#   time-based (RETENTION_DAYS=365). A fixed count is a poor proxy for
+#   calendar time under irregular usage -- real logs showed ~1/day on
+#   average but bursty, so 50 was only covering ~47 days, not "a year."
 # Round 14: More readability consolidation: confirm_or_abort() replaces
 #   two identical y/N prompts; section()/section_open()/section_close()
 #   replace 6 hand-rolled banner blocks; true constants marked readonly.
@@ -292,7 +296,7 @@ main() {
     RUN_USER="${USER:-$(id -un 2>/dev/null)}"
     BASE_BACKUP="/run/media/$RUN_USER"
     readonly MIN_DRIVE_SIZE_GB=50          # filters out tiny/non-backup drives (SD cards, boot sticks)
-    readonly RETENTION_COUNT=50            # keep this many completed snapshots; older ones are auto-deleted
+    readonly RETENTION_DAYS=365            # keep every completed snapshot newer than this many days; older ones are auto-deleted, regardless of how many that turns out to be
     readonly TRASH_RETENTION_COUNT=5       # keep this many quarantined incomplete/interrupted snapshots in .incomplete_trash before they're purged for good
     TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
     readonly COMPLETE_MARKER=".snapshot_complete"
@@ -1007,7 +1011,7 @@ main() {
     section "${GREEN}Backup Completed Successfully${NC}"
 
     # -----------------------------
-    # RETENTION (keep last RETENTION_COUNT completed snapshots)
+    # RETENTION (keep every completed snapshot newer than RETENTION_DAYS)
     # -----------------------------
     section_open "Retention"
 
@@ -1078,17 +1082,36 @@ main() {
     mapfile -t COMPLETED_SNAPSHOTS < <(printf '%s\n' "${COMPLETED_SNAPSHOTS[@]}" | sort)
 
     TOTAL_COMPLETED=${#COMPLETED_SNAPSHOTS[@]}
-    echo "Completed snapshots on drive : $TOTAL_COMPLETED (keeping last $RETENTION_COUNT)"
+    echo "Completed snapshots on drive : $TOTAL_COMPLETED (retention: $RETENTION_DAYS days)"
 
-    if [ "$TOTAL_COMPLETED" -gt "$RETENTION_COUNT" ]; then
-        TO_REMOVE=$((TOTAL_COMPLETED - RETENTION_COUNT))
-        echo "Removing $TO_REMOVE snapshot(s) beyond the retention limit:"
-        for ((i = 0; i < TO_REMOVE; i++)); do
-            old="${COMPLETED_SNAPSHOTS[$i]}"
-            if [[ ! "$old" =~ $SNAPSHOT_NAME_PATTERN ]]; then
-                warn "Skipping unexpected directory name (not deleting): $old"
-                continue
-            fi
+    # Time-based, not count-based: a fixed snapshot COUNT is a poor proxy
+    # for calendar time when runs happen irregularly (several in one day,
+    # then a multi-day gap) -- the actual coverage a fixed count buys
+    # drifts with usage pattern instead of staying anchored to what was
+    # actually asked for ("keep a year of history"). Each snapshot's own
+    # timestamp is already right there in its folder name, so the cutoff
+    # is computed directly from that instead of from how many happen to
+    # exist.
+    RETENTION_CUTOFF_EPOCH=$(date -d "-${RETENTION_DAYS} days" +%s)
+    TO_REMOVE=()
+    for name in "${COMPLETED_SNAPSHOTS[@]}"; do
+        if [[ ! "$name" =~ $SNAPSHOT_NAME_PATTERN ]]; then
+            warn "Skipping unexpected directory name (not touching): $name"
+            continue
+        fi
+        ts="${name#Backup_}"                # YYYY-MM-DD_HH-MM-SS
+        date_part="${ts%%_*}"               # YYYY-MM-DD
+        time_part="${ts#*_}"                # HH-MM-SS
+        time_part="${time_part//-/:}"       # HH:MM:SS
+        snap_epoch=$(date -d "$date_part $time_part" +%s 2>/dev/null)
+        if [ -n "$snap_epoch" ] && [ "$snap_epoch" -lt "$RETENTION_CUTOFF_EPOCH" ]; then
+            TO_REMOVE+=("$name")
+        fi
+    done
+
+    if [ ${#TO_REMOVE[@]} -gt 0 ]; then
+        echo "Removing ${#TO_REMOVE[@]} snapshot(s) older than $RETENTION_DAYS days:"
+        for old in "${TO_REMOVE[@]}"; do
             echo "  - $old"
             # ${SNAPSHOT_ROOT:?} aborts the script immediately if SNAPSHOT_ROOT
             # is ever empty/unset, instead of silently deleting from filesystem
