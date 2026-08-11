@@ -5,6 +5,22 @@
 # ======================================================
 # Changelog (most recent first), 1-2 lines per round:
 #
+# Round 18: Added a "Modified since last snapshot" report -- a file
+#   rewritten in place (same path, new content, e.g. a log or autosave)
+#   was previously invisible everywhere except as an unexplained "N
+#   files transferred," since Added/Removed only tracks path presence.
+#   Reuses data the manifest correlation step already computes, no extra
+#   scan. rsync.log excluded (always "modified" by nature -- noise).
+# Round 17: Hard-link verification now excludes rsync.log/manifest/
+#   completion-marker, matching what the manifest and added/removed
+#   report already excluded. rsync.log is brand-new every run, so it was
+#   permanently counted as "not linked," deflating the percentage by a
+#   constant +1 forever and making the numbers hard to reconcile against
+#   rsync's own transfer count -- a 100% match was never even reachable.
+# Round 16: Added files now get a named list too, not just a raw count
+#   buried in rsync's stats block -- was asymmetric with the deletion
+#   report and made it impossible to visually confirm a specific new
+#   file actually made it into the snapshot.
 # Round 15: Retention switched from count-based (RETENTION_COUNT=50) to
 #   time-based (RETENTION_DAYS=365). A fixed count is a poor proxy for
 #   calendar time under irregular usage -- real logs showed ~1/day on
@@ -653,8 +669,24 @@ main() {
         PREV_INODE_FILE=$(mktemp)
         SNAP_INODE_FILE=$(mktemp)
         TEMP_FILES+=("$PREV_INODE_FILE" "$SNAP_INODE_FILE")
-        (cd "$SNAPSHOT_ROOT/$PREV" && find . -type f -printf '%i %P\0') > "$PREV_INODE_FILE"
-        (cd "$SNAPSHOT" && find . -type f -printf '%i %P\0') > "$SNAP_INODE_FILE"
+        # Excludes the same bookkeeping files the manifest and
+        # added/removed report already exclude. rsync.log in particular
+        # is a brand-new file every single run (this run's own transfer
+        # log, never inherited from the previous snapshot) -- without
+        # this it always counted as "not hard-linked," permanently
+        # deflating the percentage by a small constant amount on every
+        # run and making the numbers harder to reconcile against rsync's
+        # own "files transferred" count.
+        (cd "$SNAPSHOT_ROOT/$PREV" && find . -type f \
+            ! -name ".snapshot_complete" \
+            ! -name ".snapshot_manifest.sha256" \
+            ! -name "rsync.log" \
+            -printf '%i %P\0') > "$PREV_INODE_FILE"
+        (cd "$SNAPSHOT" && find . -type f \
+            ! -name ".snapshot_complete" \
+            ! -name ".snapshot_manifest.sha256" \
+            ! -name "rsync.log" \
+            -printf '%i %P\0') > "$SNAP_INODE_FILE"
 
         read -r TOTAL_FILES LINKED_FILES <<< "$(awk -v RS='\0' '
             NR==FNR {
@@ -691,22 +723,37 @@ main() {
         fi
 
         # -----------------------------
-        # DELETED FILES REPORT
+        # DELETED / ADDED FILES REPORT
         # -----------------------------
+        # The deletion report existed on its own for several rounds, but
+        # additions only ever showed up as a raw "Number of created
+        # files: N" count buried in rsync's --stats block -- no filenames,
+        # no way to visually confirm a specific new file actually made it
+        # in without digging through the snapshot by hand. This computes
+        # both from the same two directory listings (one comm -23 for
+        # removed, one comm -13 for added) instead of running find a
+        # third and fourth time.
         echo ""
-        echo "Checking for files removed since previous snapshot..."
+        echo "Checking for files changed since previous snapshot..."
+        PREV_FILE_LIST=$(mktemp)
+        SNAP_FILE_LIST=$(mktemp)
         DELETED_FILE=$(mktemp)
-        TEMP_FILES+=("$DELETED_FILE")
-        comm -23 \
-            <(cd "$SNAPSHOT_ROOT/$PREV" && find . -type f \
-                ! -name ".snapshot_complete" \
-                ! -name ".snapshot_manifest.sha256" \
-                ! -name "rsync.log" | sort) \
-            <(cd "$SNAPSHOT" && find . -type f \
-                ! -name ".snapshot_complete" \
-                ! -name ".snapshot_manifest.sha256" \
-                ! -name "rsync.log" | sort) > "$DELETED_FILE"
+        ADDED_FILE=$(mktemp)
+        TEMP_FILES+=("$PREV_FILE_LIST" "$SNAP_FILE_LIST" "$DELETED_FILE" "$ADDED_FILE")
+
+        (cd "$SNAPSHOT_ROOT/$PREV" && find . -type f \
+            ! -name ".snapshot_complete" \
+            ! -name ".snapshot_manifest.sha256" \
+            ! -name "rsync.log" | sort) > "$PREV_FILE_LIST"
+        (cd "$SNAPSHOT" && find . -type f \
+            ! -name ".snapshot_complete" \
+            ! -name ".snapshot_manifest.sha256" \
+            ! -name "rsync.log" | sort) > "$SNAP_FILE_LIST"
+
+        comm -23 "$PREV_FILE_LIST" "$SNAP_FILE_LIST" > "$DELETED_FILE"
+        comm -13 "$PREV_FILE_LIST" "$SNAP_FILE_LIST" > "$ADDED_FILE"
         DELETED_COUNT=$(wc -l < "$DELETED_FILE")
+        ADDED_COUNT=$(wc -l < "$ADDED_FILE")
 
         if [ "$DELETED_COUNT" -gt 0 ]; then
             warn "Removed since last snapshot: $DELETED_COUNT file(s)"
@@ -716,7 +763,16 @@ main() {
         else
             echo "No files removed since previous snapshot."
         fi
-        rm -f "$DELETED_FILE"
+
+        if [ "$ADDED_COUNT" -gt 0 ]; then
+            echo "Added since last snapshot: $ADDED_COUNT file(s)"
+            echo "First few:"
+            head -n 5 "$ADDED_FILE" | sed 's|^\./|  + |'
+        else
+            echo "No new files since previous snapshot."
+        fi
+
+        rm -f "$PREV_FILE_LIST" "$SNAP_FILE_LIST" "$DELETED_FILE" "$ADDED_FILE"
     fi
 
     # -----------------------------
@@ -772,6 +828,18 @@ main() {
     # -----------------------------
     # SNAPSHOT MANIFEST (incremental)
     # -----------------------------
+    # NOTE on rsync.log: unlike hard-link verification (which excludes
+    # it) and the added/removed report (same), this manifest deliberately
+    # INCLUDES rsync.log. The two sections are answering different
+    # questions on purpose: hard-link verification measures --link-dest
+    # dedup efficiency, and rsync.log was never a dedup candidate (it's
+    # unique content every run by design) so excluding it there is
+    # correct. This manifest measures complete integrity coverage of
+    # everything actually sitting in the snapshot folder -- if rsync.log
+    # ever silently corrupted on disk, `sha256sum --check` should still
+    # catch that. So the two sections' file totals will always differ by
+    # exactly 1 (rsync.log) -- that's intentional, not a bug.
+    #
     # The completion marker is the trust boundary of this whole design: a
     # marked snapshot is treated as a valid --link-dest base, counted as
     # completed, and kept by retention. Because the script runs under
@@ -790,8 +858,10 @@ main() {
     MANIFEST_PREV_INODE_FILE=$(mktemp)
     MANIFEST_SNAP_INODE_FILE=$(mktemp)
     MANIFEST_CK_FILE=$(mktemp)
+    MANIFEST_MODIFIED_FILE=$(mktemp)
     TEMP_FILES+=("$MANIFEST_REUSE_FILE" "$MANIFEST_COMPUTE_FILE" \
-        "$MANIFEST_PREV_INODE_FILE" "$MANIFEST_SNAP_INODE_FILE" "$MANIFEST_CK_FILE")
+        "$MANIFEST_PREV_INODE_FILE" "$MANIFEST_SNAP_INODE_FILE" "$MANIFEST_CK_FILE" \
+        "$MANIFEST_MODIFIED_FILE")
 
     MANIFEST_OK=1
     manifest_fail() {
@@ -902,7 +972,8 @@ main() {
         awk -v RS='\0' \
             -v ck_file="$MANIFEST_CK_FILE" \
             -v reuse_file="$MANIFEST_REUSE_FILE" \
-            -v compute_file="$MANIFEST_COMPUTE_FILE" '
+            -v compute_file="$MANIFEST_COMPUTE_FILE" \
+            -v modified_file="$MANIFEST_MODIFIED_FILE" '
         BEGIN {
             while ((getline line < ck_file) > 0) {
                 if (line == "") continue
@@ -926,6 +997,21 @@ main() {
             snap_attrs = substr($0, 1, RLENGTH - 1)
             path = substr($0, RLENGTH + 1)
             sub(/^\.\//, "", path)
+            # A path that existed before with different size/mtime is a
+            # real content change -- distinct from a brand-new path
+            # (already covered by the added/removed report) and distinct
+            # from the reuse/compute decision below (an escaped-filename
+            # entry can be forced into "compute" even with unchanged
+            # attrs). This is a separate, additional classification, not
+            # a substitute for the reuse/compute logic. rsync.log is
+            # excluded here specifically -- it is always technically
+            # "modified" every single run by nature (a fresh transfer
+            # log), which is expected and not worth surfacing; the
+            # manifest itself still hashes it further down for integrity
+            # coverage, this only affects the human-facing report.
+            if (path != "rsync.log" && (path in prev_attrs) && prev_attrs[path] != snap_attrs) {
+                print path >> modified_file
+            }
             if ((path in prev_attrs) && prev_attrs[path] == snap_attrs && (path in prev_ck)) {
                 print prev_ck[path] "  ./" path >> reuse_file
             } else {
@@ -967,9 +1053,21 @@ main() {
         sort -k2 "$MANIFEST" -o "$MANIFEST" || manifest_fail "final manifest sort failed"
     fi
 
+    # Captured before cleanup below removes the temp file. Only
+    # meaningful when PREV_MANIFEST_OK was 1 (the correlation step
+    # actually ran) -- in a baseline/fallback rehash there's nothing to
+    # compare against, so this stays empty rather than misleadingly
+    # implying "checked, found none."
+    MANIFEST_MODIFIED_COUNT=0
+    MANIFEST_MODIFIED_SAMPLE=()
+    if [ -s "$MANIFEST_MODIFIED_FILE" ]; then
+        MANIFEST_MODIFIED_COUNT=$(wc -l < "$MANIFEST_MODIFIED_FILE")
+        mapfile -t MANIFEST_MODIFIED_SAMPLE < <(head -n 5 "$MANIFEST_MODIFIED_FILE")
+    fi
+
     rm -f "$MANIFEST_REUSE_FILE" "$MANIFEST_COMPUTE_FILE" \
           "$MANIFEST_PREV_INODE_FILE" "$MANIFEST_SNAP_INODE_FILE" \
-          "$MANIFEST_CK_FILE"
+          "$MANIFEST_CK_FILE" "$MANIFEST_MODIFIED_FILE"
 
     if [ "$MANIFEST_OK" -eq 1 ]; then
         MANIFEST_TOTAL=$(wc -l < "$MANIFEST")
@@ -1000,6 +1098,20 @@ main() {
             "(${MANIFEST_REUSED} inherited, ${MANIFEST_COMPUTED} hashed).${NC}"
     fi
     echo "To verify later: cd $SNAPSHOT && sha256sum --check .snapshot_manifest.sha256"
+
+    # Same-path-different-content files: the added/removed report only
+    # tracks whether a PATH appears or disappears, so a file that's
+    # rewritten in place (a log, an app's autosave/session file, etc.)
+    # was previously invisible anywhere in the output except as an
+    # unexplained "N files transferred." Only printed when the previous
+    # manifest was actually usable (PREV_MANIFEST_OK) -- a baseline
+    # rehash has nothing to compare against, so there's nothing honest
+    # to report here.
+    if [ "$PREV_MANIFEST_OK" -eq 1 ] && [ "$MANIFEST_MODIFIED_COUNT" -gt 0 ]; then
+        echo "Modified since last snapshot: $MANIFEST_MODIFIED_COUNT file(s)"
+        echo "First few:"
+        printf '  ~ %s\n' "${MANIFEST_MODIFIED_SAMPLE[@]}"
+    fi
 
     # -----------------------------
     # COMPLETION MARKER
