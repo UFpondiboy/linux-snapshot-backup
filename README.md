@@ -412,7 +412,7 @@ Incremental backup:
 
 [![Final Results](https://github.com/UFpondiboy/linux-snapshot-backup/raw/main/Docs/Screenshots2.jpg)](/UFpondiboy/linux-snapshot-backup/blob/main/Docs/Screenshots2.jpg)
 
-> **Note:** these screenshots are from an earlier version of the script and predate the Added/Removed/Modified reports and updated retention output above. Consider refreshing them from a current run if you'd like the screenshots to match this README exactly.
+> **Note:** these screenshots are from an earlier version of the script and predate the Added/Removed/Modified reports and updated retention output above.
 
 ---
 
