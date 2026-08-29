@@ -5,6 +5,48 @@
 # ======================================================
 # Changelog (most recent first), 1-2 lines per round:
 #
+# Round 25: Sanity check sampling made NUL-safe -- the last remaining
+#   newline-delimited pipeline in the script. A pathological filename
+#   could silently split into fragments discarded by the existing
+#   skip-guards, understating CHECKED without saying so. Verified
+#   side-by-side: old code reported 4/5 sampled files checked with a
+#   pathological file present, new code correctly reports 5/5.
+# Round 24: Retention and quarantine-trash deletions now check rm -rf's
+#   exit status and warn (not fatal -- a lingering old snapshot is safe)
+#   instead of silently proceeding on failure. Dry-run wording corrected
+#   ("no completed snapshot will be written" -- Backups/ itself is
+#   created unconditionally, so "nothing will be written" overstated it
+#   on a first-ever run). Declined adding head/tail to required deps:
+#   same coreutils package as already-required sha256sum/sort/wc/tr, so
+#   checking them adds no real safety margin.
+# Round 23: The completion-marker touch was unchecked -- a write failure
+#   right at that moment (read-only filesystem, disk error) would have
+#   printed false success even though the marker was never written. Next
+#   run would still correctly distrust the snapshot either way, but the
+#   false success report itself violated "fail loudly." Now caught and
+#   reported, verified against a genuine unbypassable failure (not just
+#   chmod, since root ignores permission bits in testing).
+# Round 22: Excluded macOS .DS_Store (Finder metadata junk, no content
+#   value, regenerates itself automatically) -- found in the Added
+#   report on a real run.
+# Round 21: Two real bugs found via a user's actual archival photo
+#   filenames (captions with embedded newlines used as filenames):
+#   (1) Added/Removed reports used plain newline-delimited find|sort|comm,
+#   silently splitting one such filename into phantom extra "files" and
+#   inflating counts -- now NUL-safe end to end (-print0/sort -z/comm -z/
+#   head -z). (2) The Modified report's own printf "%s\0" silently
+#   emitted NO separator at all under mawk (confirmed empirically -- \0
+#   in a format string collides with the C string-terminator convention
+#   some awk implementations use internally) -- switched to printf
+#   "%s%c", path, 0, which reliably works under both mawk and gawk.
+# Round 20: Every "First few:" list (Added/Removed/Modified/per-file
+#   errors) now says "First N of M" instead. Twice now, a user assumed a
+#   file's absence from the 5-item preview meant it wasn't backed up,
+#   when it was just outside the shown sample -- this removes the
+#   ambiguity outright rather than relying on the reader to infer it.
+# Round 19: Excluded LibreOffice/OpenOffice lock files (.~lock.*#) --
+#   transient session-state that only exists while a document is open,
+#   found flickering in and out of the Added report on a real run.
 # Round 18: Added a "Modified since last snapshot" report -- a file
 #   rewritten in place (same path, new content, e.g. a log or autosave)
 #   was previously invisible everywhere except as an unexplained "N
@@ -144,6 +186,21 @@ confirm_or_abort() {
     if [[ ! "$reply" =~ ^[Yy]$ ]]; then
         echo "Aborted."
         exit 1
+    fi
+}
+
+sample_header() {
+    # "First few:" gave no indication of how many MORE existed beyond
+    # what's shown -- twice now, a user assumed a file's absence from a
+    # 5-item preview meant it wasn't backed up, when it was actually just
+    # outside the shown sample (e.g. 33 added, only the first 5 printed).
+    # Spelling out "First N of M" removes that ambiguity outright instead
+    # of relying on the reader to infer it.
+    local shown="$1" total="$2"
+    if [ "$total" -gt "$shown" ]; then
+        echo "First $shown of $total:"
+    else
+        echo "All $total:"
     fi
 }
 
@@ -338,7 +395,7 @@ main() {
     done
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        warn "DRY RUN MODE — nothing will be written to the drive."
+        warn "DRY RUN MODE — no completed snapshot will be written. (On a first-ever run, the empty Backups/ folder itself may still be created.)"
     fi
 
     # -----------------------------
@@ -491,6 +548,18 @@ main() {
         "--exclude=*~"
         "--exclude=.Trash*"
         "--exclude=.backupignore"
+        # LibreOffice/OpenOffice lock files (e.g. ".~lock.June 2026.odt#").
+        # These only exist while the document is actually open and vanish
+        # the moment it's closed -- transient session state, not real
+        # content. Without this, a lock file flickers in and out of the
+        # Added/Removed reports every time a document happens to be open
+        # at backup time, which is pure noise.
+        "--exclude=.~lock.*#"
+        # macOS Finder metadata (folder view settings, icon positions,
+        # etc.) -- pure junk on a Linux backup, no content value, and
+        # regenerates itself automatically whenever Finder touches the
+        # folder again.
+        "--exclude=.DS_Store"
     )
 
     FILTER_ARGS=(--filter=': .backupignore')
@@ -633,7 +702,7 @@ main() {
 
     if [ "$DRY_RUN" -eq 1 ]; then
         rm -rf "$SNAPSHOT"
-        section "${YELLOW}Dry run complete — nothing was written. No snapshot, log, or retention changes were made.${NC}"
+        section "${YELLOW}Dry run complete — no snapshot was kept. No snapshot, log, or retention changes were made.${NC}"
         exit 0
     fi
 
@@ -646,7 +715,7 @@ main() {
     echo ""
     if [ "$ERROR_LINES" -gt 0 ]; then
         warn "Per-file warnings/errors detected: $ERROR_LINES"
-        echo "First few:"
+        sample_header 5 "$ERROR_LINES"
         grep "^rsync: " "$LOGFILE" | head -n 5
         echo "Full details in: $LOGFILE"
         SUMMARY_HAD_WARNINGS=1
@@ -733,6 +802,15 @@ main() {
         # both from the same two directory listings (one comm -23 for
         # removed, one comm -13 for added) instead of running find a
         # third and fourth time.
+        #
+        # NUL-delimited throughout (-print0/sort -z/comm -z/head -z), not
+        # newline-delimited: a filename containing a literal embedded
+        # newline (real-world example: archival photo captions used as
+        # filenames, e.g. a photo named after a long descriptive caption)
+        # would otherwise silently split into two phantom "files" here --
+        # inflating the Added/Removed counts and corrupting the displayed
+        # names, even though the manifest section elsewhere in this
+        # script was already hardened against exactly this.
         echo ""
         echo "Checking for files changed since previous snapshot..."
         PREV_FILE_LIST=$(mktemp)
@@ -744,30 +822,30 @@ main() {
         (cd "$SNAPSHOT_ROOT/$PREV" && find . -type f \
             ! -name ".snapshot_complete" \
             ! -name ".snapshot_manifest.sha256" \
-            ! -name "rsync.log" | sort) > "$PREV_FILE_LIST"
+            ! -name "rsync.log" -print0 | sort -z) > "$PREV_FILE_LIST"
         (cd "$SNAPSHOT" && find . -type f \
             ! -name ".snapshot_complete" \
             ! -name ".snapshot_manifest.sha256" \
-            ! -name "rsync.log" | sort) > "$SNAP_FILE_LIST"
+            ! -name "rsync.log" -print0 | sort -z) > "$SNAP_FILE_LIST"
 
-        comm -23 "$PREV_FILE_LIST" "$SNAP_FILE_LIST" > "$DELETED_FILE"
-        comm -13 "$PREV_FILE_LIST" "$SNAP_FILE_LIST" > "$ADDED_FILE"
-        DELETED_COUNT=$(wc -l < "$DELETED_FILE")
-        ADDED_COUNT=$(wc -l < "$ADDED_FILE")
+        comm -z -23 "$PREV_FILE_LIST" "$SNAP_FILE_LIST" > "$DELETED_FILE"
+        comm -z -13 "$PREV_FILE_LIST" "$SNAP_FILE_LIST" > "$ADDED_FILE"
+        DELETED_COUNT=$(tr -cd '\0' < "$DELETED_FILE" | wc -c)
+        ADDED_COUNT=$(tr -cd '\0' < "$ADDED_FILE" | wc -c)
 
         if [ "$DELETED_COUNT" -gt 0 ]; then
             warn "Removed since last snapshot: $DELETED_COUNT file(s)"
             echo "(still safely present in $PREV — nothing is lost)"
-            echo "First few:"
-            head -n 5 "$DELETED_FILE" | sed 's|^\./|  - |'
+            sample_header 5 "$DELETED_COUNT"
+            head -z -n 5 "$DELETED_FILE" | tr '\0' '\n' | sed 's|^\./|  - |'
         else
             echo "No files removed since previous snapshot."
         fi
 
         if [ "$ADDED_COUNT" -gt 0 ]; then
             echo "Added since last snapshot: $ADDED_COUNT file(s)"
-            echo "First few:"
-            head -n 5 "$ADDED_FILE" | sed 's|^\./|  + |'
+            sample_header 5 "$ADDED_COUNT"
+            head -z -n 5 "$ADDED_FILE" | tr '\0' '\n' | sed 's|^\./|  + |'
         else
             echo "No new files since previous snapshot."
         fi
@@ -784,10 +862,10 @@ main() {
         echo ""
         echo "Running sanity check ($VERIFY_SAMPLE_SIZE random files, not exhaustive)..."
 
-        mapfile -t SAMPLE_FILES < <(cd "$SNAPSHOT" && find . -type f \
+        mapfile -d '' -t SAMPLE_FILES < <(cd "$SNAPSHOT" && find . -type f \
             ! -name "$(basename "$LOGFILE")" ! -name "$COMPLETE_MARKER" \
             ! -name ".snapshot_manifest.sha256" \
-            | shuf -n "$VERIFY_SAMPLE_SIZE" 2>/dev/null)
+            -print0 | shuf -z -n "$VERIFY_SAMPLE_SIZE" 2>/dev/null)
 
         CHECKED=0
         MISMATCHES=0
@@ -1009,8 +1087,18 @@ main() {
             # log), which is expected and not worth surfacing; the
             # manifest itself still hashes it further down for integrity
             # coverage, this only affects the human-facing report.
+            #
+            # Written NUL-terminated using %c with argument 0, NOT
+            # printf "%s\0": under mawk, \0 inside a format string is
+            # silently dropped entirely rather than emitting a real NUL
+            # byte (confirmed empirically -- it collides with the C
+            # string-terminator convention some awk implementations use
+            # internally). %c with 0 as the argument reliably produces an
+            # actual 0x00 byte under both mawk and gawk. Without this,
+            # entries written here would have no real separator at all
+            # and silently merge together.
             if (path != "rsync.log" && (path in prev_attrs) && prev_attrs[path] != snap_attrs) {
-                print path >> modified_file
+                printf "%s%c", path, 0 >> modified_file
             }
             if ((path in prev_attrs) && prev_attrs[path] == snap_attrs && (path in prev_ck)) {
                 print prev_ck[path] "  ./" path >> reuse_file
@@ -1061,8 +1149,8 @@ main() {
     MANIFEST_MODIFIED_COUNT=0
     MANIFEST_MODIFIED_SAMPLE=()
     if [ -s "$MANIFEST_MODIFIED_FILE" ]; then
-        MANIFEST_MODIFIED_COUNT=$(wc -l < "$MANIFEST_MODIFIED_FILE")
-        mapfile -t MANIFEST_MODIFIED_SAMPLE < <(head -n 5 "$MANIFEST_MODIFIED_FILE")
+        MANIFEST_MODIFIED_COUNT=$(tr -cd '\0' < "$MANIFEST_MODIFIED_FILE" | wc -c)
+        mapfile -d '' -t MANIFEST_MODIFIED_SAMPLE < <(head -z -n 5 "$MANIFEST_MODIFIED_FILE")
     fi
 
     rm -f "$MANIFEST_REUSE_FILE" "$MANIFEST_COMPUTE_FILE" \
@@ -1109,7 +1197,7 @@ main() {
     # to report here.
     if [ "$PREV_MANIFEST_OK" -eq 1 ] && [ "$MANIFEST_MODIFIED_COUNT" -gt 0 ]; then
         echo "Modified since last snapshot: $MANIFEST_MODIFIED_COUNT file(s)"
-        echo "First few:"
+        sample_header 5 "$MANIFEST_MODIFIED_COUNT"
         printf '  ~ %s\n' "${MANIFEST_MODIFIED_SAMPLE[@]}"
     fi
 
@@ -1117,8 +1205,17 @@ main() {
     # COMPLETION MARKER
     # -----------------------------
     # Only reached if MANIFEST_OK held all the way through -- see the
-    # gate immediately above.
-    touch "$SNAPSHOT/$COMPLETE_MARKER"
+    # gate immediately above. Checking touch's own exit status matters
+    # because this file is the trust boundary of the whole design: if the
+    # destination goes read-only or hits a write error at this exact
+    # moment, an unchecked touch would let the script print "Backup
+    # Completed Successfully" even though the marker was never actually
+    # written. The next run would still correctly treat this snapshot as
+    # incomplete (no marker = not trusted), so no corruption risk either
+    # way -- but a false success report is exactly the kind of thing this
+    # project's "fail loudly" principle exists to prevent.
+    touch "$SNAPSHOT/$COMPLETE_MARKER" \
+        || fatal "Failed to write completion marker for $(basename "$SNAPSHOT") -- snapshot will NOT be considered complete."
 
     section "${GREEN}Backup Completed Successfully${NC}"
 
@@ -1178,7 +1275,7 @@ main() {
                     continue
                 fi
                 echo "  - $old_trash"
-                rm -rf "${TRASH_DIR:?}/$old_trash"
+                rm -rf "${TRASH_DIR:?}/$old_trash" || warn "Deletion failed for quarantined snapshot $old_trash -- it may still be occupying space on the drive."
             done
         elif [ "$TRASH_TOTAL" -gt 0 ]; then
             echo "Quarantined incomplete snapshots on drive : $TRASH_TOTAL (keeping last $TRASH_RETENTION_COUNT, in .incomplete_trash)"
@@ -1230,7 +1327,12 @@ main() {
             # root ("/$old"). Flagged by shellcheck (SC2115); other guards
             # already made this unreachable in practice, but this closes the
             # gap explicitly rather than relying on those alone.
-            rm -rf "${SNAPSHOT_ROOT:?}/$old"
+            #
+            # Exit status checked: a failed deletion here is safe (the old
+            # snapshot just lingers, consuming space) but silently
+            # swallowing that failure violates "fail loudly" -- the user
+            # should know retention didn't actually happen for this one.
+            rm -rf "${SNAPSHOT_ROOT:?}/$old" || warn "Retention deletion failed for $old -- it may still be occupying space on the drive."
         done
     else
         echo "Nothing to remove."
