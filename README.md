@@ -61,27 +61,31 @@ The philosophy is simple:
 
 ## Quick Start
 
+```
 git clone https://github.com/UFpondiboy/linux-snapshot-backup.git
 cd linux-snapshot-backup
 chmod +x snapshot-backup.sh
 mkdir -p ~/.local/bin
 cp snapshot-backup.sh ~/.local/bin/
-
+```
 
 Make sure `~/.local/bin` is on your `PATH` (most modern distros already add it automatically for interactive shells). If it isn't, add this to your `~/.bashrc`:
 
+```
 export PATH="$HOME/.local/bin:$PATH"
-
+```
 
 Then run it:
 
+```
 snapshot-backup.sh
-
+```
 
 The script will detect connected external drives, let you pick one, and create a snapshot. To preview what a backup *would* do without writing anything to disk:
 
+```
 snapshot-backup.sh --dry-run
-
+```
 
 ---
 
@@ -168,9 +172,10 @@ These filesystems do not reliably support hard links. Using one as your backup d
 
 The first run creates a complete baseline snapshot:
 
+```
 Backups/
 └── Backup_2026-06-27_10-00-56/
-
+```
 
 ### Subsequent Backups
 
@@ -179,11 +184,12 @@ Later runs use `rsync --link-dest=<previous_snapshot>`:
 - Unchanged files are hard-linked to the previous snapshot (zero extra disk space)
 - Changed or new files are copied normally
 
+```
 Backups/
 ├── Backup_2026-06-27_10-00-56/
 ├── Backup_2026-06-28_10-00-22/
 └── Backup_2026-06-29_10-00-11/
-
+```
 
 Each snapshot looks and browses like a complete, independent backup — but unchanged files physically occupy disk space only once.
 
@@ -193,13 +199,15 @@ Each snapshot looks and browses like a complete, independent backup — but unch
 
 Run interactively:
 
+```
 snapshot-backup.sh
-
+```
 
 Preview a run without writing anything:
 
+```
 snapshot-backup.sh --dry-run
-
+```
 
 The script will:
 
@@ -216,14 +224,16 @@ The script will:
 
 No special restore process exists — that's intentional. Browse to the desired snapshot with any file manager (Dolphin, Nautilus, Thunar) or the command line:
 
+```
 Backups/
 └── Backup_2026-06-27_10-00-56/
-
+```
 
 Copy files back with `cp` or `rsync`:
 
+```
 cp Backup_2026-06-27_10-00-56/Documents/report.pdf ~/Documents/
-
+```
 
 Entire folders can be restored the same way.
 
@@ -233,20 +243,23 @@ Entire folders can be restored the same way.
 
 Every completed snapshot contains `.snapshot_manifest.sha256`. To verify a snapshot at any point in the future — confirming the data hasn't been corrupted or bit-rotted since it was created:
 
+```
 cd Backup_2026-06-27_10-00-56
 sha256sum --check .snapshot_manifest.sha256
-
+```
 
 A successful verification reports every file as `OK` with no `FAILED` entries:
 
+```
 ./Documents/report.pdf: OK
 ./Pictures/photo.jpg: OK
-
+```
 
 For a quiet pass/fail check instead of per-file output:
 
+```
 sha256sum --check --quiet .snapshot_manifest.sha256 && echo "All files verified OK"
-
+```
 
 This check reads the snapshot data directly off the backup drive — it verifies the backup itself, independent of your live system. Even if your primary drive fails entirely, a verified snapshot has already proven itself intact on its own.
 
@@ -256,15 +269,17 @@ This check reads the snapshot data directly off the backup drive — it verifies
 
 Optional custom source list:
 
+```
 ~/.config/snapshot-backup/sources.conf
-
+```
 
 One path per line:
 
+```
 ~/Documents
 ~/Pictures
 ~/Videos
-
+```
 
 Blank lines and lines starting with `#` are ignored. A leading `~` expands to `$HOME`. If no config file exists, the script uses its built-in default source list (Desktop, Documents, Downloads, Pictures, Videos).
 
@@ -274,10 +289,11 @@ Blank lines and lines starting with `#` are ignored. A leading `~` expands to `$
 
 Place a `.backupignore` file inside any source directory to exclude patterns from that folder only:
 
+```
 *.tmp
 *.bak
 cache/
-
+```
 
 Rules apply only to that directory subtree. Implemented using rsync's native per-directory merge filter (`--filter=': .backupignore'`), so path handling is done correctly by rsync itself rather than hand-built exclude logic.
 
@@ -325,41 +341,41 @@ Integrity verification is performed using per-snapshot SHA-256 manifests, genera
 ## Example Output
 
 A typical incremental run, showing hard-link verification, added/removed/modified tracking, sanity check, and incremental manifest inheritance in action:
-======================================================
-Snapshot Backup (Engine v5.1)
 
+```
+======================================================
+ Snapshot Backup (Engine v5.1)
+======================================================
 Detecting external drives...
 
 Available drives:
-
-Path FS Free
-
-[0] /run/media/user/BackupDrive ext4 822G
+  #  Path                                          FS         Free
+[0]  /run/media/user/BackupDrive                   ext4       822G
 
 Select drive: 0
 
 Repository : /run/media/user/BackupDrive/Backups
 Filesystem : ext4
-Previous : Backup_2026-07-02_09-36-03
-Mode : HARD LINK SNAPSHOT (ACTIVE)
+Previous   : Backup_2026-07-02_09-36-03
+Mode       : HARD LINK SNAPSHOT (ACTIVE)
 
 Creating Snapshot:
 /run/media/user/BackupDrive/Backups/Backup_2026-07-03_09-45-24
-
+------------------------------------------------------
 Estimating required space (running rsync dry-run, this can take a moment)...
 Estimated new data to write : 3 GB
-Available space on target : 822 GB
+Available space on target   : 822 GB
 [RUNNING] Backup in progress...
 
 ======================================================
 Snapshot Summary
-
+======================================================
 Base snapshot : Backup_2026-07-02_09-36-03
 
-Snapshot created : Backup_2026-07-03_09-45-24
+Snapshot created  : Backup_2026-07-03_09-45-24
 Files transferred : 11
-New data written : 2,194,552,464 bytes
-rsync duration : 31 sec
+New data written  : 2,194,552,464 bytes
+rsync duration    : 31 sec
 
 No per-file errors detected.
 
@@ -370,9 +386,8 @@ Checking for files changed since previous snapshot...
 No files removed since previous snapshot.
 Added since last snapshot: 2 file(s)
 First few:
-
-Documents/Report/Q3_summary.pdf
-Pictures/Trip/beach.jpg
+  + Documents/Report/Q3_summary.pdf
+  + Pictures/Trip/beach.jpg
 
 Running sanity check (20 random files, not exhaustive)...
 Sanity check passed: 20 sampled files match the source.
@@ -383,19 +398,25 @@ Manifest written: 36704 file(s) total (36692 inherited [99.97%], 12 hashed).
 To verify later: cd .../Backup_2026-07-03_09-45-24 && sha256sum --check .snapshot_manifest.sha256
 Modified since last snapshot: 1 file(s)
 First few:
-~ Documents/Notes/journal.txt
+  ~ Documents/Notes/journal.txt
 
 ======================================================
 Backup Completed Successfully
+======================================================
+
 ======================================================
 Retention
 Quarantined incomplete snapshots on drive : 0 (keeping last 5, in .incomplete_trash)
 Completed snapshots on drive : 14 (retention: 365 days)
 Nothing to remove.
+======================================================
+
 Quick integrity signal:
 Apparent snapshot size (includes hard-linked data): 44G
 Total script duration : 42 sec
 (rsync-only duration shown separately in snapshot summary above)
+======================================================
+```
 
 Out of 36,704 files, 36,692 checksums were inherited from the previous snapshot's manifest — only 12 files needed to be freshly hashed. That's the incremental manifest doing its job: full integrity coverage without re-reading the entire dataset on every run.
 
