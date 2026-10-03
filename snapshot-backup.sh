@@ -5,6 +5,20 @@
 # ======================================================
 # Changelog (most recent first), 1-2 lines per round:
 #
+# Round 26: Drive detection filtered on `[ -d ]` (directory exists) only,
+#   never confirming the candidate was an actual live mount point. Two
+#   real, related bugs from this: (1) a stale mount-point directory left
+#   behind after an unclean unmount looks identical to a live drive to
+#   this check, and df on it silently reports whatever filesystem
+#   contains it (usually the internal drive) instead of erring out --
+#   explains a real user report of two disconnected drives both showing
+#   up with the same wrong free-space number as the internal drive. (2)
+#   scanning /media/* also matched /media/$RUN_USER itself (the
+#   container folder the real per-drive mount points live inside, not a
+#   drive in its own right) for the same reason. Fixed by requiring
+#   `mountpoint -q` to pass before a candidate is considered at all --
+#   added mountpoint (util-linux, same package as already-required
+#   flock/realpath) to the dependency check.
 # Round 25: Sanity check sampling made NUL-safe -- the last remaining
 #   newline-delimited pipeline in the script. A pathological filename
 #   could silently split into fragments discarded by the existing
@@ -260,7 +274,7 @@ check_dependencies() {
     # detecting/handling different package managers (apt/pacman/dnf/etc.),
     # which is a bigger trust and complexity ask than a backup script
     # should make silently.
-    local required_backup_cmds=(rsync flock realpath df mkdir date basename dirname)
+    local required_backup_cmds=(rsync flock realpath mountpoint df mkdir date basename dirname)
     local required_integrity_cmds=(find awk grep sed sort comm tee sync du mktemp xargs sha256sum wc tr)
     # Optional UX-only commands (notify-send, upower, shuf) are probed
     # individually at their point of use and degrade gracefully -- they
@@ -307,6 +321,24 @@ detect_drives() {
         [ -d "$base_candidate" ] || continue
         for d in "$base_candidate"/*; do
             [ -d "$d" ] || continue
+
+            # Round 26: a directory existing is not the same thing as a
+            # drive being mounted there right now. Two real bugs traced
+            # back to this gap: (1) a stale mount-point directory left
+            # behind by an unclean unmount looks identical to a live
+            # drive here, and df on it below would silently report
+            # whatever filesystem actually contains it (usually the
+            # internal drive) instead of failing -- so a disconnected
+            # drive's old folder could still show up as "available,"
+            # with a free-space number that's actually the internal
+            # drive's. (2) scanning /media/* also matches
+            # /media/$RUN_USER itself -- the container folder real
+            # per-drive mount points live inside, not a drive in its own
+            # right -- for the exact same reason. `mountpoint -q`
+            # confirms this is a genuinely active mount, not just a
+            # directory that happens to exist, and rules out both cases
+            # at once.
+            mountpoint -q "$d" || continue
 
             real_d=$(realpath "$d" 2>/dev/null)
             already_found=0
