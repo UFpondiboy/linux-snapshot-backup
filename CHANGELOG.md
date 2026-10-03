@@ -4,6 +4,10 @@
 
 ## v5.1 (Engine)
 
+### Round 26
+
+- **Drive detection now confirms a candidate is an actual, currently-mounted filesystem, not just an existing directory.** *A real user report surfaced this: two disconnected drives' stale, leftover mount-point folders were listed as "available," both showing the same wrong free-space number — because `df` on an ordinary (non-mount) directory doesn't fail, it silently reports whatever filesystem actually contains it, usually the internal drive. The same gap also let the per-user mount container folder itself (e.g. `/media/username`) get listed as a candidate backup drive, since it's not a drive at all, just the folder real per-drive mount points live inside. Fixed by requiring `mountpoint -q` to pass before a candidate is considered at all — added `mountpoint` (util-linux, same package as already-required `flock`/`realpath`) to the dependency check. Verified empirically: `mountpoint -q` returns non-zero for an ordinary directory and zero for a genuine mount point.*
+
 ### Round 25
 
 - **Made sanity-check file sampling NUL-safe** — the last remaining newline-delimited pipeline in the script. *A pathological filename (one containing an embedded newline) could previously split into fragments and get silently discarded by the existing skip-guards, understating the reported `CHECKED` count without any indication anything was wrong. Verified side-by-side: with a pathological filename present, the old code reported 4/5 sampled files checked; the corrected code reports 5/5.*
