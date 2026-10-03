@@ -1,85 +1,62 @@
+# Snapshot Backup (Engine v5.1)
+
+A lightweight, hardened snapshot-based backup system for Linux, built on `rsync` and hard links.
+
+Each backup appears as a complete, independent copy of your files, while unchanged files are shared between snapshots using hard links. This gives you Time Machine–style versioned backups without duplicating unchanged data on disk.
+
+Built and tested on KDE Plasma / udisks2 automount setups, with fallback support for other Linux desktop environments.
+
+> **What "snapshot" means in this project**
+>
+> This project creates **directory-based snapshots** using `rsync` and hard links.
+> It does **not** create filesystem snapshots such as **Btrfs**, **ZFS**, or **LVM** snapshots.
+>
+> Every snapshot is an ordinary directory that can be browsed, searched, copied, and restored using standard Linux file tools — no special restore utility, database, or proprietary format is required.
 
 ---
 
-## Features
+## Design Goals
 
-- Snapshot-based backups using `rsync --link-dest`
-- Hard-link deduplication — unchanged files cost zero extra disk space
-- Incremental storage growth — only new/changed data is written
-- Restore by simple file copy — no special tooling required
-- Per-snapshot SHA-256 integrity manifests
-- **Incremental manifest generation** — unchanged files inherit their checksum from the previous snapshot instead of being re-hashed every run, with live progress shown during a full/large hash
-- **Named Added / Removed / Modified reports** — every run tells you exactly which files were added, removed, or changed in place since the last snapshot, not just a raw count
-- **Time-based retention** (default: 365 days) — keeps every completed snapshot newer than the configured window, regardless of how many that turns out to be
-- **Incomplete-run quarantine** — an interrupted snapshot (power loss, unplugged drive, Ctrl+C) is moved to a separate quarantine folder instead of being deleted, so partial data stays recoverable
-- External drive auto-detection (`/run/media/$USER`, `/media/$USER`, `/media`)
-- Source/destination overlap protection
-- Concurrent-run protection via file locking
-- Safe interrupt cleanup for all temporary files (Ctrl+C, SIGTERM, crashes)
-- Optional per-folder `.backupignore`, plus built-in exclusion of common junk (editor backup files, LibreOffice/OpenOffice lock files, cache/trash directories)
-- Post-backup sanity check (random sample vs. live source)
-- Dry-run mode
-- Desktop notifications on success/failure
-- Detailed per-run logging
+This project intentionally prioritizes **reliability, simplicity, and long-term recoverability** over feature count.
+
+The guiding principles are:
+
+- **Single self-contained Bash script** — no helper scripts, libraries, or installation process.
+- **Human-readable backups** — every snapshot is a normal directory that can be browsed with any file manager.
+- **Simple restores** — recover files using standard Linux tools such as `cp`, `rsync`, or your preferred file manager.
+- **No proprietary formats** — backups remain usable even if this project is no longer available.
+- **Fail safely** — if the script cannot verify that a snapshot completed correctly, it refuses to mark it as complete.
+- **Integrity first** — completed snapshots include SHA-256 manifests and multiple verification stages to help detect corruption.
+- **Portable by design** — depends only on standard Linux utilities available on virtually every distribution.
+- **No cloud services, databases, daemons, or background processes** — the script performs its work and exits.
+
+The philosophy is simple:
+
+> **If this script disappeared tomorrow, every backup it created should still be completely usable with standard Linux filesystem tools.**
 
 ---
 
-## Non-Goals
+## Table of Contents
 
-This project intentionally does not provide:
-
-- Cloud backup
-- Encryption
-- Compression
-- Backup databases
-- Windows support
-- Network repositories
-- Continuous real-time backup
-- Enterprise backup management
-
----
-
-## Requirements
-
-**Required:**
-
-- Linux
-- Bash 4+
-- `rsync`
-- `coreutils` (includes `sha256sum`, `sort`, `wc`, `tr`, `mkdir`, `date`, `basename`, `dirname`, `realpath`, `du`, `mktemp`, `sync`)
-- `findutils` (`find`, `xargs`)
-- `util-linux` (`flock`) — used to prevent concurrent runs; the script will not start without it
-
-**Optional (script degrades gracefully if missing):**
-
-- `notify-send` — desktop notifications
-- `upower` — battery status warning
-- `shuf` — required for the sanity check step
-
-If a required command is missing, the script fails immediately with a clear message and an install suggestion for common package managers (`apt`, `pacman`, `dnf`, `eopkg`) rather than failing partway through a run.
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Non-Goals](#non-goals)
+- [Requirements](#requirements)
+- [Filesystem Support](#filesystem-support)
+- [How It Works](#how-it-works)
+- [Usage](#usage)
+- [Restoring Files](#restoring-files)
+- [Snapshot Verification](#snapshot-verification)
+- [Configuration](#configuration)
+- [.backupignore Support](#backupignore-support)
+- [Retention](#retention)
+- [Security & Privacy](#security--privacy)
+- [Known Limitations](#known-limitations)
+- [Example Output](#example-output)
+- [Design Philosophy](#design-philosophy)
+- [License](#license)
+- [Disclaimer](#disclaimer)
 
 ---
 
-## Filesystem Support
-
-**Recommended (destination drive):**
-
-- ext4
-- xfs
-- btrfs
-
-**Not recommended for snapshot mode:**
-
-- exFAT
-- vFAT / FAT32
-- NTFS (including FUSE-mounted NTFS/exFAT)
-
-These filesystems do not reliably support hard links. Using one as your backup destination will cause every snapshot to become a full, non-deduplicated copy rather than a space-efficient incremental one. The script detects this and warns you before proceeding.
-
----
-
-## How It Works
-
-### First Backup
-
-The first run creates a complete baseline snapshot:
+## Quick Start
