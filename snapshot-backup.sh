@@ -5,20 +5,15 @@
 # ======================================================
 # Changelog (most recent first), 1-2 lines per round:
 #
-# Round 26: Drive detection filtered on `[ -d ]` (directory exists) only,
-#   never confirming the candidate was an actual live mount point. Two
-#   real, related bugs from this: (1) a stale mount-point directory left
-#   behind after an unclean unmount looks identical to a live drive to
-#   this check, and df on it silently reports whatever filesystem
-#   contains it (usually the internal drive) instead of erring out --
-#   explains a real user report of two disconnected drives both showing
-#   up with the same wrong free-space number as the internal drive. (2)
-#   scanning /media/* also matched /media/$RUN_USER itself (the
-#   container folder the real per-drive mount points live inside, not a
-#   drive in its own right) for the same reason. Fixed by requiring
-#   `mountpoint -q` to pass before a candidate is considered at all --
-#   added mountpoint (util-linux, same package as already-required
-#   flock/realpath) to the dependency check.
+# Round 26: Drive detection checked only that a candidate directory
+#   existed, never that it was a live mount. A stale mount-point folder left
+#   after an unclean unmount, or /media/$RUN_USER itself (a container, not a
+#   drive), was listed as a drive with the parent filesystem's free space
+#   (reported by an external GitHub user). Now requires `mountpoint -q`;
+#   mountpoint (util-linux) added to the dependency check. Verified with a
+#   side-by-side bind-mount reproduction: old code listed 4 entries with
+#   identical wrong free space, new code lists only the real mount.
+#
 # Round 25: Sanity check sampling made NUL-safe -- the last remaining
 #   newline-delimited pipeline in the script. A pathological filename
 #   could silently split into fragments discarded by the existing
@@ -322,22 +317,10 @@ detect_drives() {
         for d in "$base_candidate"/*; do
             [ -d "$d" ] || continue
 
-            # Round 26: a directory existing is not the same thing as a
-            # drive being mounted there right now. Two real bugs traced
-            # back to this gap: (1) a stale mount-point directory left
-            # behind by an unclean unmount looks identical to a live
-            # drive here, and df on it below would silently report
-            # whatever filesystem actually contains it (usually the
-            # internal drive) instead of failing -- so a disconnected
-            # drive's old folder could still show up as "available,"
-            # with a free-space number that's actually the internal
-            # drive's. (2) scanning /media/* also matches
-            # /media/$RUN_USER itself -- the container folder real
-            # per-drive mount points live inside, not a drive in its own
-            # right -- for the exact same reason. `mountpoint -q`
-            # confirms this is a genuinely active mount, not just a
-            # directory that happens to exist, and rules out both cases
-            # at once.
+            # Must be a live mount point. A bare directory can be a stale
+            # leftover from an unclean unmount, or a container folder such
+            # as /media/$RUN_USER; df on either silently reports the PARENT
+            # filesystem, producing phantom drives with a wrong free size.
             mountpoint -q "$d" || continue
 
             real_d=$(realpath "$d" 2>/dev/null)
