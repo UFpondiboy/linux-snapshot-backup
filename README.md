@@ -100,7 +100,7 @@ snapshot-backup.sh --dry-run
 - **Named Added / Removed / Modified reports** — every run tells you exactly which files were added, removed, or changed in place since the last snapshot, not just a raw count
 - **Time-based retention** (default: 365 days) — keeps every completed snapshot newer than the configured window, regardless of how many that turns out to be
 - **Incomplete-run quarantine** — an interrupted snapshot (power loss, unplugged drive, Ctrl+C) is moved to a separate quarantine folder instead of being deleted, so partial data stays recoverable
-- External drive auto-detection (`/run/media/$USER`, `/media/$USER`, `/media`)
+- External drive auto-detection (`/run/media/$USER`, `/media/$USER`, `/media`) — only live mount points are listed, so stale leftover folders never appear as phantom drives
 - Source/destination overlap protection
 - Concurrent-run protection via file locking
 - Safe interrupt cleanup for all temporary files (Ctrl+C, SIGTERM, crashes)
@@ -136,7 +136,7 @@ This project intentionally does not provide:
 - `rsync`
 - `coreutils` (includes `sha256sum`, `sort`, `wc`, `tr`, `mkdir`, `date`, `basename`, `dirname`, `realpath`, `du`, `mktemp`, `sync`)
 - `findutils` (`find`, `xargs`)
-- `util-linux` (`flock`) — used to prevent concurrent runs; the script will not start without it
+- `util-linux` (`flock`, `mountpoint`) — `flock` prevents concurrent runs; `mountpoint` ensures only live mounted drives are listed. The script will not start without them
 
 **Optional (script degrades gracefully if missing):**
 
@@ -297,7 +297,7 @@ cache/
 
 Rules apply only to that directory subtree. Implemented using rsync's native per-directory merge filter (`--filter=': .backupignore'`), so path handling is done correctly by rsync itself rather than hand-built exclude logic.
 
-In addition to your own `.backupignore` rules, the script always excludes a small built-in set of common junk regardless of configuration: `.cache`, trash directories, editor backup files (`*~`), and LibreOffice/OpenOffice lock files (`.~lock.*#`) — the latter being transient session-state files that only exist while a document is actually open.
+In addition to your own `.backupignore` rules, the script always excludes a small built-in set of common junk regardless of configuration: `.cache`, trash directories, editor backup files (`*~`), macOS `.DS_Store` files, and LibreOffice/OpenOffice lock files (`.~lock.*#`) — the latter being transient session-state files that only exist while a document is actually open.
 
 ---
 
